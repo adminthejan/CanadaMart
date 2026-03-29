@@ -1,0 +1,12 @@
+PyQt6>=6.6.0
+PyQt6-Qt6>=6.6.0
+PyQt6-sip>=13.6.0
+ShopifyAPI>=12.3.0
+python-escpos>=3.1.0
+pyserial>=3.5
+reportlab>=4.1.0
+Pillow>=10.2.0
+requests>=2.31.0
+openpyxl>=3.1.2
+matplotlib>=3.8.0
+pyinstaller>=6.4.0
