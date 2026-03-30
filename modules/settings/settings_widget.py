@@ -280,10 +280,42 @@ class SettingsWidget(QWidget):
         self._shopify_url.setPlaceholderText("your-store.myshopify.com")
         form.addRow("Shop URL", self._shopify_url)
 
+        # OAuth client credentials (preferred – auto-refreshes every 24 h)
+        cred_note = QLabel(
+            "<i>Enter Client ID + Secret from your Shopify Partners dashboard.<br>"
+            "A token is fetched automatically and refreshed every 24 h.</i>"
+        )
+        cred_note.setWordWrap(True)
+        form.addRow("", cred_note)
+
+        self._shopify_client_id = QLineEdit()
+        self._shopify_client_id.setPlaceholderText("Client ID from Partners dashboard")
+        form.addRow("Client ID", self._shopify_client_id)
+
+        self._shopify_client_secret = QLineEdit()
+        self._shopify_client_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self._shopify_client_secret.setPlaceholderText("Client Secret from Partners dashboard")
+        form.addRow("Client Secret", self._shopify_client_secret)
+
+        show_secret = QCheckBox("Show secret")
+        show_secret.toggled.connect(
+            lambda v: self._shopify_client_secret.setEchoMode(
+                QLineEdit.EchoMode.Normal if v else QLineEdit.EchoMode.Password
+            )
+        )
+        form.addRow("", show_secret)
+
+        # Optional static token override (for permanent / custom-app tokens)
+        static_note = QLabel(
+            "<i>OR enter a static <b>shpat_</b> token below (leave blank when using Client ID/Secret).</i>"
+        )
+        static_note.setWordWrap(True)
+        form.addRow("", static_note)
+
         self._shopify_token = QLineEdit()
         self._shopify_token.setEchoMode(QLineEdit.EchoMode.Password)
-        self._shopify_token.setPlaceholderText("shpat_xxxxxxxxxx")
-        form.addRow("Access Token", self._shopify_token)
+        self._shopify_token.setPlaceholderText("shpat_xxxxxxxxxx  (optional override)")
+        form.addRow("Static Token", self._shopify_token)
 
         show_token = QCheckBox("Show token")
         show_token.toggled.connect(
@@ -309,7 +341,11 @@ class SettingsWidget(QWidget):
         self._shopify_sync_products = QCheckBox("Sync product catalogue")
         form.addRow("", self._shopify_sync_products)
 
-        self._shopify_sync_inventory = QCheckBox("Sync inventory levels")
+        self._shopify_sync_inventory = QCheckBox("Sync stock to Shopify after each sale")
+        self._shopify_sync_inventory.setToolTip(
+            "When enabled, stock levels are pushed to Shopify immediately after a sale is processed.\n"
+            "Disable this if you want to prevent real-time stock updates (e.g. while testing)."
+        )
         form.addRow("", self._shopify_sync_inventory)
 
         layout.addLayout(form)
@@ -510,8 +546,10 @@ class SettingsWidget(QWidget):
         # Shopify
         self._shopify_enabled.setChecked(bool(c.get("shopify_enabled", False)))
         self._shopify_url.setText(c.get("shopify_shop_url", ""))
+        self._shopify_client_id.setText(c.get("shopify_client_id", ""))
+        self._shopify_client_secret.setText(c.get("shopify_client_secret", ""))
         self._shopify_token.setText(c.get("shopify_access_token", ""))
-        self._shopify_api_version.setText(c.get("shopify_api_version", "2024-01"))
+        self._shopify_api_version.setText(c.get("shopify_api_version", "2026-01"))
         self._shopify_location_id.setText(c.get("shopify_location_id", ""))
         self._shopify_sync_interval.setValue(int(c.get("shopify_sync_interval", 300)))
         self._shopify_sync_products.setChecked(bool(c.get("shopify_sync_products", True)))
@@ -583,8 +621,10 @@ class SettingsWidget(QWidget):
             # Shopify
             "shopify_enabled": self._shopify_enabled.isChecked(),
             "shopify_shop_url": self._shopify_url.text().strip(),
+            "shopify_client_id": self._shopify_client_id.text().strip(),
+            "shopify_client_secret": self._shopify_client_secret.text().strip(),
             "shopify_access_token": self._shopify_token.text().strip(),
-            "shopify_api_version": self._shopify_api_version.text().strip() or "2024-01",
+            "shopify_api_version": self._shopify_api_version.text().strip() or "2026-01",
             "shopify_location_id": self._shopify_location_id.text().strip(),
             "shopify_sync_interval": self._shopify_sync_interval.value(),
             "shopify_sync_products": self._shopify_sync_products.isChecked(),
@@ -630,12 +670,15 @@ class SettingsWidget(QWidget):
     def _refresh_logo_preview(self):
         path = self._logo_path.text()
         if path and os.path.exists(path):
-            pix = QPixmap(path).scaled(
-                196, 76,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            self._logo_preview.setPixmap(pix)
+            pix = QPixmap(path)
+            if not pix.isNull():
+                self._logo_preview.setPixmap(pix.scaled(
+                    196, 76,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+            else:
+                self._logo_preview.setText("⚠ Cannot load image")
         else:
             self._logo_preview.setText("No Logo")
 
@@ -643,27 +686,85 @@ class SettingsWidget(QWidget):
     #  Tests                                                               #
     # ------------------------------------------------------------------ #
     def _test_shopify(self):
+        import urllib.request, urllib.parse, json
         url = self._shopify_url.text().strip()
-        token = self._shopify_token.text().strip()
-        version = self._shopify_api_version.text().strip() or "2024-01"
-        if not url or not token:
-            QMessageBox.warning(self, "Missing Info", "Please enter Shop URL and Access Token.")
+        version = self._shopify_api_version.text().strip() or "2026-01"
+        client_id = self._shopify_client_id.text().strip()
+        client_secret = self._shopify_client_secret.text().strip()
+        static_token = self._shopify_token.text().strip()
+
+        if not url:
+            QMessageBox.warning(self, "Missing Info", "Please enter the Shop URL.")
             return
+        if not client_id and not static_token:
+            QMessageBox.warning(
+                self, "Missing Credentials",
+                "Enter Client ID + Client Secret, or a Static Access Token."
+            )
+            return
+
+        if not url.startswith("https://"):
+            url = f"https://{url}"
+
         try:
+            # ── Step 1: obtain token ──────────────────────────────────
+            if client_id and client_secret:
+                oauth_url = f"{url}/admin/oauth/access_token"
+                data = urllib.parse.urlencode({
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                }).encode()
+                req = urllib.request.Request(
+                    oauth_url, data=data,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    body = json.loads(resp.read())
+                token = body.get("access_token", "")
+                if not token:
+                    QMessageBox.critical(
+                        self, "Token Error",
+                        f"Shopify did not return a token.\nResponse: {body}"
+                    )
+                    return
+            else:
+                token = static_token
+
+            # ── Step 2: verify connection ─────────────────────────────
             import shopify
-            if not url.startswith("https://"):
-                url = f"https://{url}"
             shopify.ShopifyResource.set_site(f"{url}/admin/api/{version}")
             shopify.ShopifyResource.set_headers({"X-Shopify-Access-Token": token})
             shop = shopify.Shop.current()
+
+            # ── Step 3: save credentials and auto-enable only on success ─
+            self._shopify_enabled.setChecked(True)
+            self.config.update({
+                "shopify_enabled":        True,
+                "shopify_shop_url":       url,
+                "shopify_client_id":      client_id,
+                "shopify_client_secret":  client_secret,
+                "shopify_access_token":   static_token,
+                "shopify_api_version":    version,
+                "shopify_location_id":    self._shopify_location_id.text().strip(),
+                "shopify_sync_interval":  self._shopify_sync_interval.value(),
+                "shopify_sync_products":  self._shopify_sync_products.isChecked(),
+                "shopify_sync_inventory": self._shopify_sync_inventory.isChecked(),
+            })
+
             QMessageBox.information(
                 self, "Connection Successful",
                 f"✓ Connected to: {shop.name}\n"
                 f"Domain: {shop.domain}\n"
-                f"Currency: {shop.currency}"
+                f"Currency: {shop.currency}\n\n"
+                f"Credentials saved and Shopify integration enabled.\n"
+                f"Click 'Save All Settings' to start the sync."
             )
         except ImportError:
             QMessageBox.warning(self, "Package Missing", "Install ShopifyAPI:\npip install ShopifyAPI")
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode() if hasattr(e, 'read') else str(e)
+            QMessageBox.critical(self, "Connection Failed", f"HTTP {e.code}:\n{err_body}")
         except Exception as e:
             QMessageBox.critical(self, "Connection Failed", str(e))
 

@@ -16,6 +16,269 @@ from PyQt6.QtGui import QColor, QBrush, QIcon, QPixmap
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Variant Add/Edit dialog
+# ═══════════════════════════════════════════════════════════════════════════
+class VariantDialog(QDialog):
+    """Add or edit a single product variant."""
+
+    def __init__(self, variant: Optional[dict] = None, parent=None):
+        super().__init__(parent)
+        self.variant = variant
+        self.setWindowTitle("Edit Variant" if variant else "Add Variant")
+        self.setMinimumWidth(420)
+        self._build()
+        if variant:
+            self._populate(variant)
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("e.g. Small / Red")
+        form.addRow("Variant Name *", self._name)
+
+        self._sku = QLineEdit()
+        self._sku.setPlaceholderText("Optional")
+        form.addRow("SKU", self._sku)
+
+        self._barcode = QLineEdit()
+        self._barcode.setPlaceholderText("Optional")
+        form.addRow("Barcode", self._barcode)
+
+        self._price = QDoubleSpinBox()
+        self._price.setRange(0, 999999)
+        self._price.setDecimals(2)
+        self._price.setPrefix("$ ")
+        form.addRow("Price *", self._price)
+
+        self._cost = QDoubleSpinBox()
+        self._cost.setRange(0, 999999)
+        self._cost.setDecimals(2)
+        self._cost.setPrefix("$ ")
+        form.addRow("Cost", self._cost)
+
+        self._qty = QSpinBox()
+        self._qty.setRange(0, 999999)
+        form.addRow("Stock Quantity", self._qty)
+
+        # Option axes
+        opt_lbl = QLabel("Option Axes  (e.g. Size=Large, Color=Red)")
+        opt_lbl.setStyleSheet("color:#94a3b8; font-size:11px;")
+        form.addRow(opt_lbl)
+
+        self._opt1_name = QLineEdit(); self._opt1_name.setPlaceholderText("e.g. Size")
+        self._opt1_val  = QLineEdit(); self._opt1_val.setPlaceholderText("e.g. Large")
+        row1 = QHBoxLayout(); row1.addWidget(self._opt1_name); row1.addWidget(self._opt1_val)
+        form.addRow("Option 1", row1)
+
+        self._opt2_name = QLineEdit(); self._opt2_name.setPlaceholderText("e.g. Color")
+        self._opt2_val  = QLineEdit(); self._opt2_val.setPlaceholderText("e.g. Red")
+        row2 = QHBoxLayout(); row2.addWidget(self._opt2_name); row2.addWidget(self._opt2_val)
+        form.addRow("Option 2", row2)
+
+        self._opt3_name = QLineEdit(); self._opt3_name.setPlaceholderText("e.g. Material")
+        self._opt3_val  = QLineEdit(); self._opt3_val.setPlaceholderText("e.g. Cotton")
+        row3 = QHBoxLayout(); row3.addWidget(self._opt3_name); row3.addWidget(self._opt3_val)
+        form.addRow("Option 3", row3)
+
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self._save)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _populate(self, v: dict):
+        self._name.setText(v.get("name", ""))
+        self._sku.setText(v.get("sku", "") or "")
+        self._barcode.setText(v.get("barcode", "") or "")
+        self._price.setValue(float(v.get("price", 0)))
+        self._cost.setValue(float(v.get("cost", 0)))
+        self._qty.setValue(int(v.get("quantity", 0)))
+        self._opt1_name.setText(v.get("option1_name", "") or "")
+        self._opt1_val.setText(v.get("option1_value", "") or "")
+        self._opt2_name.setText(v.get("option2_name", "") or "")
+        self._opt2_val.setText(v.get("option2_value", "") or "")
+        self._opt3_name.setText(v.get("option3_name", "") or "")
+        self._opt3_val.setText(v.get("option3_value", "") or "")
+
+    def _save(self):
+        name = self._name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Validation", "Variant name is required.")
+            return
+        self.data = {
+            "name": name,
+            "sku": self._sku.text().strip() or None,
+            "barcode": self._barcode.text().strip() or None,
+            "price": self._price.value(),
+            "cost": self._cost.value(),
+            "quantity": self._qty.value(),
+            "option1_name": self._opt1_name.text().strip() or None,
+            "option1_value": self._opt1_val.text().strip() or None,
+            "option2_name": self._opt2_name.text().strip() or None,
+            "option2_value": self._opt2_val.text().strip() or None,
+            "option3_name": self._opt3_name.text().strip() or None,
+            "option3_value": self._opt3_val.text().strip() or None,
+        }
+        self.accept()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Variants sub-tab used inside ProductDialog
+# ═══════════════════════════════════════════════════════════════════════════
+class _VariantsTab(QWidget):
+    """Embedded variants manager for use inside the ProductDialog tabs."""
+
+    def __init__(self, db, product_id: Optional[int] = None, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.product_id = product_id
+        # pending adds/edits before product is saved
+        self._pending: List[dict] = []
+        self._build()
+        if product_id:
+            self._reload()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(8)
+
+        tb = QHBoxLayout()
+        add_btn = QPushButton("+ Add Variant")
+        add_btn.setObjectName("PrimaryBtn")
+        add_btn.clicked.connect(self._add)
+        tb.addWidget(add_btn)
+
+        self._edit_btn = QPushButton("✏ Edit")
+        self._edit_btn.clicked.connect(self._edit)
+        tb.addWidget(self._edit_btn)
+
+        self._del_btn = QPushButton("🗑 Remove")
+        self._del_btn.setObjectName("DangerBtn")
+        self._del_btn.clicked.connect(self._remove)
+        tb.addWidget(self._del_btn)
+        tb.addStretch()
+        layout.addLayout(tb)
+
+        self._table = QTableWidget(0, 7)
+        self._table.setHorizontalHeaderLabels(
+            ["Name", "SKU", "Price", "Cost", "Stock", "Option 1", "Option 2"]
+        )
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, 7):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.verticalHeader().hide()
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setAlternatingRowColors(True)
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.doubleClicked.connect(self._edit)
+        layout.addWidget(self._table)
+
+        self._variants: List[dict] = []
+
+    def _reload(self):
+        if self.product_id:
+            self._variants = self.db.get_variants(self.product_id)
+        self._populate()
+
+    def _populate(self):
+        rows = self._variants + self._pending
+        self._table.setRowCount(len(rows))
+        for r, v in enumerate(rows):
+            opt1 = " / ".join(filter(None, [v.get("option1_name"), v.get("option1_value")]))
+            opt2 = " / ".join(filter(None, [v.get("option2_name"), v.get("option2_value")]))
+            cells = [
+                v.get("name", ""),
+                v.get("sku", "") or "",
+                f"{v.get('price', 0):.2f}",
+                f"{v.get('cost', 0):.2f}",
+                str(v.get("quantity", 0)),
+                opt1,
+                opt2,
+            ]
+            for c, val in enumerate(cells):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                self._table.setItem(r, c, item)
+        self._table.resizeRowsToContents()
+
+    def _all_variants(self):
+        return self._variants + self._pending
+
+    def _selected_index(self):
+        row = self._table.currentRow()
+        if 0 <= row < len(self._all_variants()):
+            return row
+        return -1
+
+    def _add(self):
+        dlg = VariantDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._pending.append(dlg.data)
+            self._populate()
+
+    def _edit(self):
+        idx = self._selected_index()
+        if idx < 0:
+            QMessageBox.information(self, "Select", "Please select a variant to edit.")
+            return
+        all_v = self._all_variants()
+        dlg = VariantDialog(variant=all_v[idx], parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            if idx < len(self._variants):
+                # existing DB variant – update immediately if product_id exists
+                if self.product_id:
+                    self.db.update_variant(self._variants[idx]["id"], dlg.data)
+                    self._variants[idx].update(dlg.data)
+                else:
+                    self._variants[idx].update(dlg.data)
+            else:
+                pi = idx - len(self._variants)
+                self._pending[pi].update(dlg.data)
+            self._populate()
+
+    def _remove(self):
+        idx = self._selected_index()
+        if idx < 0:
+            return
+        if idx < len(self._variants):
+            reply = QMessageBox.question(
+                self, "Remove Variant",
+                "Remove this variant? Stock history is preserved.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                if self.product_id:
+                    self.db.delete_variant(self._variants[idx]["id"])
+                self._variants.pop(idx)
+                self._populate()
+        else:
+            pi = idx - len(self._variants)
+            self._pending.pop(pi)
+            self._populate()
+
+    def flush_pending(self, product_id: int):
+        """Called after product save – persist pending new variants to DB."""
+        for v in self._pending:
+            v["product_id"] = product_id
+            self.db.add_variant(v)
+        self._pending.clear()
+        self.product_id = product_id
+        self._reload()
+
+    def has_variants(self) -> bool:
+        return bool(self._variants or self._pending)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Product Add/Edit dialog
 # ═══════════════════════════════════════════════════════════════════════════
 class ProductDialog(QDialog):
@@ -26,7 +289,7 @@ class ProductDialog(QDialog):
         self.db = db
         self.product = product
         self.setWindowTitle("Edit Product" if product else "Add Product")
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(540)
         self._build()
         if product:
             self._populate(product)
@@ -104,7 +367,15 @@ class ProductDialog(QDialog):
         self._tax_rate.setSuffix(" %")
         pform.addRow("Tax Rate (-1 = default)", self._tax_rate)
 
+        self._pos_only = QCheckBox("POS Only  (never sync to Shopify)")
+        self._pos_only.setStyleSheet("color:#fcd34d;")
+        pform.addRow("", self._pos_only)
+
         tabs.addTab(pricing, "Pricing & Stock")
+
+        # ── Variants tab ────────────────────────────────────────────────
+        self._variants_tab = _VariantsTab(self.db, None, parent=self)
+        tabs.addTab(self._variants_tab, "Variants")
 
         # Buttons
         btns = QDialogButtonBox(
@@ -125,6 +396,7 @@ class ProductDialog(QDialog):
         self._min_qty.setValue(int(p.get("min_quantity", 5)))
         self._unit.setText(p.get("unit", "pcs") or "pcs")
         self._tax_rate.setValue(float(p.get("tax_rate", -1) or -1))
+        self._pos_only.setChecked(bool(p.get("pos_only", 0)))
 
         # Category
         cat_id = p.get("category_id")
@@ -133,6 +405,10 @@ class ProductDialog(QDialog):
                 if self._category.itemData(i) == cat_id:
                     self._category.setCurrentIndex(i)
                     break
+
+        # Load variants for this product
+        self._variants_tab.product_id = p.get("id")
+        self._variants_tab._reload()
 
     def _save(self):
         name = self._name.text().strip()
@@ -156,6 +432,8 @@ class ProductDialog(QDialog):
             "min_quantity": self._min_qty.value(),
             "unit": self._unit.text().strip() or "pcs",
             "tax_rate": self._tax_rate.value(),
+            "pos_only": 1 if self._pos_only.isChecked() else 0,
+            "has_variants": 1 if self._variants_tab.has_variants() else 0,
         }
         self.accept()
 
@@ -477,6 +755,117 @@ class CategoryManagerDialog(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Live Shopify Sync dialog
+# ═══════════════════════════════════════════════════════════════════════════
+class _ShopifySyncDialog(QDialog):
+    """Runs a manual Shopify sync and streams live progress into a log view."""
+
+    def __init__(self, shopify_service, parent=None):
+        super().__init__(parent)
+        self.shopify_service = shopify_service
+        self.setWindowTitle("Shopify Sync")
+        self.setMinimumSize(520, 380)
+        self._finished = False
+        self._build()
+        self._start_sync()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        self._status_lbl = QLabel("⏳  Connecting to Shopify…")
+        self._status_lbl.setStyleSheet("font-size:14px; font-weight:600; color:#f1f5f9;")
+        layout.addWidget(self._status_lbl)
+
+        self._log = QTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setStyleSheet(
+            "background:#0f172a; color:#94a3b8; font-size:12px; border-radius:6px;"
+        )
+        layout.addWidget(self._log, 1)
+
+        self._close_btn = QPushButton("Close")
+        self._close_btn.setEnabled(False)
+        self._close_btn.setMinimumHeight(44)
+        self._close_btn.clicked.connect(self.accept)
+        layout.addWidget(self._close_btn)
+
+    def _log_line(self, text: str, color: str = "#94a3b8"):
+        self._log.append(
+            f'<span style="color:{color};">{text}</span>'
+        )
+
+    def _start_sync(self):
+        worker = self.shopify_service.worker
+        if worker is None:
+            # Service not started – spin up a one-shot worker
+            from services.shopify_sync import ShopifySyncWorker
+            worker = ShopifySyncWorker(
+                self.shopify_service.config,
+                self.shopify_service.db,
+            )
+            import threading
+            t = threading.Thread(
+                target=lambda: (worker._init_shopify() and worker._do_sync()),
+                daemon=True,
+            )
+            self._one_shot_worker = worker   # keep reference
+            self._connect_worker(worker)
+            t.start()
+        else:
+            self._connect_worker(worker)
+            import threading
+            threading.Thread(
+                target=worker._do_sync, daemon=True
+            ).start()
+
+    def _connect_worker(self, worker):
+        worker.status_changed.connect(self._on_status)
+        worker.sync_error.connect(self._on_error)
+        worker.sync_finished.connect(self._on_finished)
+        worker.product_synced.connect(
+            lambda name: self._log_line(f"  ✓  {name}", "#4ade80")
+        )
+
+    def _on_status(self, text: str):
+        self._status_lbl.setText(f"⏳  {text}")
+        self._log_line(text, "#60a5fa")
+
+    def _on_error(self, text: str):
+        self._status_lbl.setText(f"❌  Sync error")
+        self._log_line(f"ERROR: {text}", "#f87171")
+        self._close_btn.setEnabled(True)
+        self._finished = True
+
+    def _on_finished(self, pushed: int, pulled: int):
+        self._status_lbl.setText(
+            f"✅  Sync complete  –  {pushed} pushed, {pulled} pulled"
+        )
+        self._status_lbl.setStyleSheet(
+            "font-size:14px; font-weight:600; color:#4ade80;"
+        )
+        self._log_line(
+            f"Done — pushed {pushed} product(s), pulled {pulled} product(s).",
+            "#4ade80",
+        )
+        self._close_btn.setEnabled(True)
+        self._finished = True
+
+    def closeEvent(self, event):
+        # Disconnect to avoid dangling signal connections to a dead dialog
+        try:
+            worker = getattr(self, "_one_shot_worker",
+                             self.shopify_service.worker)
+            if worker:
+                worker.status_changed.disconnect(self._on_status)
+                worker.sync_error.disconnect(self._on_error)
+                worker.sync_finished.disconnect(self._on_finished)
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Main Inventory Widget
 # ═══════════════════════════════════════════════════════════════════════════
 class InventoryWidget(QWidget):
@@ -562,14 +951,14 @@ class InventoryWidget(QWidget):
         layout.addLayout(filter_row)
 
         # ── Products table ──────────────────────────────────────────────
-        self._table = QTableWidget(0, 10)
+        self._table = QTableWidget(0, 11)
         self._table.setHorizontalHeaderLabels([
             "SKU", "Name", "Category", "Price", "Cost", "Stock",
-            "Min Stock", "Unit", "Shopify", "Actions"
+            "Min Stock", "Unit", "Variants", "Shopify", "Actions"
         ])
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for col in [0, 2, 3, 4, 5, 6, 7, 8]:
+        for col in [0, 2, 3, 4, 5, 6, 7, 8, 9]:
             hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._table.verticalHeader().hide()
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -624,7 +1013,7 @@ class InventoryWidget(QWidget):
         for p in self._products:
             if cat_id and p.get("category_id") != cat_id:
                 continue
-            qty = int(p.get("quantity", 0))
+            qty = int(p.get("total_stock") if p.get("total_stock") is not None else p.get("quantity", 0))
             if stock_filt == "Low Stock" and not (0 < qty <= threshold):
                 continue
             if stock_filt == "Out of Stock" and qty > 0:
@@ -647,8 +1036,9 @@ class InventoryWidget(QWidget):
         self._displayed = products
 
         for row, p in enumerate(products):
-            qty = int(p.get("quantity", 0))
+            qty = int(p.get("total_stock") if p.get("total_stock") is not None else p.get("quantity", 0))
 
+            variant_count = int(p.get("variant_count") or 0)
             cells = [
                 p.get("sku", "") or "",
                 p.get("name", ""),
@@ -658,6 +1048,7 @@ class InventoryWidget(QWidget):
                 str(qty),
                 str(p.get("min_quantity", 5)),
                 p.get("unit", "pcs") or "pcs",
+                str(variant_count) if variant_count else "—",
                 "✓" if p.get("shopify_id") else "—",
                 "",
             ]
@@ -675,9 +1066,17 @@ class InventoryWidget(QWidget):
                     else:
                         item.setForeground(QBrush(QColor("#4ade80")))
 
-                if col == 8:
+                if col == 8:  # Variants column
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    if p.get("shopify_id"):
+                    if variant_count > 0:
+                        item.setForeground(QBrush(QColor("#60a5fa")))
+
+                if col == 9:  # Shopify column
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if p.get("pos_only"):
+                        item.setText("🔒 POS")
+                        item.setForeground(QBrush(QColor("#fcd34d")))
+                    elif p.get("shopify_id"):
                         item.setForeground(QBrush(QColor("#4ade80")))
 
                 self._table.setItem(row, col, item)
@@ -696,7 +1095,8 @@ class InventoryWidget(QWidget):
     def _add_product(self):
         dlg = ProductDialog(self.db, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.db.add_product(dlg.data)
+            product_id = self.db.add_product(dlg.data)
+            dlg._variants_tab.flush_pending(product_id)
             self._load_products()
 
     def _edit_product(self):
@@ -709,6 +1109,7 @@ class InventoryWidget(QWidget):
             data = dlg.data
             data["shopify_synced"] = 0  # mark for re-sync
             self.db.update_product(product["id"], data)
+            dlg._variants_tab.flush_pending(product["id"])
             self._load_products()
 
     def _delete_product(self):
@@ -757,10 +1158,12 @@ class InventoryWidget(QWidget):
         dlg.exec()
 
     def _trigger_shopify_sync(self):
-        if self.shopify_service:
-            self.shopify_service.trigger_sync()
-            QMessageBox.information(self, "Sync Triggered",
-                                    "Shopify sync has been triggered in the background.")
+        if not self.shopify_service:
+            return
+        dlg = _ShopifySyncDialog(self.shopify_service, self)
+        dlg.exec()
+        # Reload products after dialog closes (sync may have pulled new items)
+        self._load_products()
 
     # ------------------------------------------------------------------ #
     #  CSV import / export                                                 #

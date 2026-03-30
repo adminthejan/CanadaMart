@@ -51,10 +51,11 @@ class DatabaseManager:
                 PRAGMA foreign_keys = ON;
 
                 CREATE TABLE IF NOT EXISTS categories (
-                    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name  TEXT UNIQUE NOT NULL,
-                    color TEXT DEFAULT '#3B82F6',
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name                TEXT UNIQUE NOT NULL,
+                    color               TEXT DEFAULT '#3B82F6',
+                    shopify_collection_id TEXT,
+                    created_at          TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS products (
@@ -75,7 +76,31 @@ class DatabaseManager:
                     shopify_variant_id        TEXT,
                     shopify_inventory_item_id TEXT,
                     shopify_synced            INTEGER DEFAULT 0,
+                    has_variants              INTEGER DEFAULT 0,
+                    pos_only                  INTEGER DEFAULT 0,
                     last_synced               TEXT,
+                    active                    INTEGER DEFAULT 1,
+                    created_at                TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at                TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS product_variants (
+                    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    product_id                INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+                    name                      TEXT NOT NULL,
+                    sku                       TEXT,
+                    barcode                   TEXT,
+                    price                     REAL NOT NULL DEFAULT 0,
+                    cost                      REAL DEFAULT 0,
+                    quantity                  INTEGER DEFAULT 0,
+                    option1_name              TEXT,
+                    option1_value             TEXT,
+                    option2_name              TEXT,
+                    option2_value             TEXT,
+                    option3_name              TEXT,
+                    option3_value             TEXT,
+                    shopify_variant_id        TEXT,
+                    shopify_inventory_item_id TEXT,
                     active                    INTEGER DEFAULT 1,
                     created_at                TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at                TEXT DEFAULT CURRENT_TIMESTAMP
@@ -118,6 +143,7 @@ class DatabaseManager:
                     id               INTEGER PRIMARY KEY AUTOINCREMENT,
                     sale_id          INTEGER NOT NULL REFERENCES sales(id),
                     product_id       INTEGER REFERENCES products(id),
+                    variant_id       INTEGER REFERENCES product_variants(id),
                     product_name     TEXT NOT NULL,
                     sku              TEXT,
                     quantity         INTEGER NOT NULL,
@@ -159,25 +185,39 @@ class DatabaseManager:
                 );
             """)
             conn.commit()
+            # Migration: empty-string SKUs/barcodes must be NULL so that
+            # the UNIQUE constraint on sku allows multiple no-SKU products.
+            conn.execute("UPDATE products SET sku     = NULL WHERE sku     = ''")
+            conn.execute("UPDATE products SET barcode = NULL WHERE barcode = ''")
+            conn.commit()
+            # Schema migrations for older databases
+            for col_sql in [
+                "ALTER TABLE categories ADD COLUMN shopify_collection_id TEXT",
+                "ALTER TABLE sale_items ADD COLUMN variant_id INTEGER REFERENCES product_variants(id)",
+                "ALTER TABLE products ADD COLUMN has_variants INTEGER DEFAULT 0",
+                "ALTER TABLE products ADD COLUMN pos_only INTEGER DEFAULT 0",
+            ]:
+                try:
+                    conn.execute(col_sql)
+                    conn.commit()
+                except Exception:
+                    pass  # column already exists
+            # Remove the old built-in placeholder categories that have no products.
+            for cat_name in ("General", "Food & Beverage", "Electronics",
+                             "Clothing", "Health & Beauty"):
+                conn.execute(
+                    """DELETE FROM categories
+                       WHERE name = ?
+                         AND id NOT IN (SELECT DISTINCT category_id
+                                        FROM products
+                                        WHERE category_id IS NOT NULL)""",
+                    (cat_name,),
+                )
+            conn.commit()
             self._seed_defaults(conn)
 
     def _seed_defaults(self, conn: sqlite3.Connection):
-        defaults = [
-            ("General", "#6B7280"),
-            ("Food & Beverage", "#10B981"),
-            ("Electronics", "#3B82F6"),
-            ("Clothing", "#8B5CF6"),
-            ("Health & Beauty", "#EC4899"),
-        ]
-        for name, color in defaults:
-            try:
-                conn.execute(
-                    "INSERT OR IGNORE INTO categories (name, color) VALUES (?, ?)",
-                    (name, color),
-                )
-            except Exception:
-                pass
-        # Seed default admin account (password: admin123)
+        # Only seed the default admin account – no preset categories.
         pw_hash = hashlib.sha256("admin123".encode()).hexdigest()
         try:
             conn.execute(
@@ -196,33 +236,149 @@ class DatabaseManager:
         rows = self._execute("SELECT * FROM categories ORDER BY name").fetchall()
         return [dict(r) for r in rows]
 
-    def add_category(self, name: str, color: str = "#3B82F6") -> int:
+    def get_category(self, cat_id: int) -> Optional[Dict]:
+        row = self._execute(
+            "SELECT * FROM categories WHERE id = ?", (cat_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def add_category(self, name: str, color: str = "#3B82F6",
+                     shopify_collection_id: str = None) -> int:
         cur = self._execute(
-            "INSERT OR IGNORE INTO categories (name, color) VALUES (?, ?)",
-            (name, color),
+            "INSERT OR IGNORE INTO categories (name, color, shopify_collection_id) VALUES (?, ?, ?)",
+            (name, color, shopify_collection_id),
         )
         self._commit()
         return cur.lastrowid
 
-    def update_category(self, cat_id: int, name: str, color: str):
+    def update_category(self, cat_id: int, name: str, color: str,
+                        shopify_collection_id: str = None):
         self._execute(
-            "UPDATE categories SET name=?, color=? WHERE id=?",
-            (name, color, cat_id),
+            "UPDATE categories SET name=?, color=?, shopify_collection_id=? WHERE id=?",
+            (name, color, shopify_collection_id, cat_id),
         )
         self._commit()
+
+    def get_category_by_shopify_id(self, shopify_id: str) -> Optional[Dict]:
+        row = self._execute(
+            "SELECT * FROM categories WHERE shopify_collection_id = ?", (shopify_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
     def delete_category(self, cat_id: int):
         self._execute("DELETE FROM categories WHERE id = ?", (cat_id,))
         self._commit()
 
     # ================================================================== #
-    #  PRODUCTS                                                            #
+    #  PRODUCT VARIANTS                                                    #
     # ================================================================== #
+    def get_variants(self, product_id: int) -> List[Dict]:
+        rows = self._execute(
+            "SELECT * FROM product_variants WHERE product_id = ? AND active = 1 ORDER BY id",
+            (product_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_variant(self, variant_id: int) -> Optional[Dict]:
+        row = self._execute(
+            "SELECT * FROM product_variants WHERE id = ?", (variant_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_variant_by_shopify_id(self, shopify_variant_id: str) -> Optional[Dict]:
+        row = self._execute(
+            "SELECT * FROM product_variants WHERE shopify_variant_id = ?",
+            (shopify_variant_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_variant_by_sku(self, sku: str) -> Optional[Dict]:
+        row = self._execute(
+            "SELECT * FROM product_variants WHERE sku = ? AND active = 1", (sku,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def add_variant(self, data: dict) -> int:
+        cols = [
+            "product_id", "name", "sku", "barcode", "price", "cost", "quantity",
+            "option1_name", "option1_value", "option2_name", "option2_value",
+            "option3_name", "option3_value",
+            "shopify_variant_id", "shopify_inventory_item_id",
+        ]
+        fields = [c for c in cols if c in data]
+        placeholders = ", ".join("?" * len(fields))
+        values = [data[f] for f in fields]
+        cur = self._execute(
+            f"INSERT INTO product_variants ({', '.join(fields)}) VALUES ({placeholders})",
+            values,
+        )
+        self._commit()
+        return cur.lastrowid
+
+    def update_variant(self, variant_id: int, data: dict):
+        data["updated_at"] = datetime.now().isoformat()
+        allowed = [
+            "name", "sku", "barcode", "price", "cost", "quantity",
+            "option1_name", "option1_value", "option2_name", "option2_value",
+            "option3_name", "option3_value",
+            "shopify_variant_id", "shopify_inventory_item_id",
+            "active", "updated_at",
+        ]
+        fields = [k for k in data if k in allowed]
+        sets = ", ".join(f"{f} = ?" for f in fields)
+        values = [data[f] for f in fields] + [variant_id]
+        self._execute(f"UPDATE product_variants SET {sets} WHERE id = ?", values)
+        self._commit()
+
+    def delete_variant(self, variant_id: int):
+        self._execute(
+            "UPDATE product_variants SET active = 0 WHERE id = ?", (variant_id,)
+        )
+        self._commit()
+
+    def adjust_variant_stock(self, variant_id: int, delta: int,
+                             change_type: str, reference_id: str = None,
+                             notes: str = None):
+        """Atomically adjust a variant's stock quantity."""
+        with self._lock:
+            conn = self._conn()
+            row = conn.execute(
+                "SELECT quantity, product_id FROM product_variants WHERE id = ?",
+                (variant_id,),
+            ).fetchone()
+            if not row:
+                return
+            before = row["quantity"]
+            after = before + delta
+            conn.execute(
+                "UPDATE product_variants SET quantity = ?, updated_at = ? WHERE id = ?",
+                (after, datetime.now().isoformat(), variant_id),
+            )
+            # Also log against the parent product
+            conn.execute(
+                """INSERT INTO inventory_log
+                   (product_id, change_type, quantity_change, quantity_before,
+                    quantity_after, reference_id, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (row["product_id"], change_type, delta, before, after,
+                 reference_id, notes),
+            )
+            conn.commit()
     def get_products(self, active_only=True, category_id=None) -> List[Dict]:
         sql = """
-            SELECT p.*, c.name AS category_name, c.color AS category_color
+            SELECT p.*,
+                   c.name  AS category_name,
+                   c.color AS category_color,
+                   COUNT(v.id) AS variant_count,
+                   CASE
+                       WHEN p.has_variants = 1
+                       THEN COALESCE(SUM(v.quantity), 0)
+                       ELSE p.quantity
+                   END AS total_stock
             FROM products p
             LEFT JOIN categories c ON p.category_id = c.id
+            LEFT JOIN product_variants v
+                   ON v.product_id = p.id AND v.active = 1
             WHERE 1=1
         """
         params = []
@@ -231,7 +387,7 @@ class DatabaseManager:
         if category_id:
             sql += " AND p.category_id = ?"
             params.append(category_id)
-        sql += " ORDER BY p.name"
+        sql += " GROUP BY p.id ORDER BY p.name"
         rows = self._execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
@@ -252,10 +408,18 @@ class DatabaseManager:
         row = self._execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
         return dict(row) if row else None
 
-    def get_product_by_barcode(self, barcode: str) -> Optional[Dict]:
-        row = self._execute(
-            "SELECT * FROM products WHERE barcode = ? AND active = 1", (barcode,)
-        ).fetchone()
+    def get_product_by_barcode(self, barcode: str, active_only: bool = True) -> Optional[Dict]:
+        sql = "SELECT * FROM products WHERE barcode = ?"
+        if active_only:
+            sql += " AND active = 1"
+        row = self._execute(sql, (barcode,)).fetchone()
+        return dict(row) if row else None
+
+    def get_product_by_sku(self, sku: str, active_only: bool = True) -> Optional[Dict]:
+        sql = "SELECT * FROM products WHERE sku = ?"
+        if active_only:
+            sql += " AND active = 1"
+        row = self._execute(sql, (sku,)).fetchone()
         return dict(row) if row else None
 
     def get_product_by_shopify_id(self, shopify_id: str) -> Optional[Dict]:
@@ -269,7 +433,7 @@ class DatabaseManager:
             "sku", "barcode", "name", "description", "category_id",
             "price", "cost", "quantity", "min_quantity", "unit",
             "tax_rate", "image_path", "shopify_id", "shopify_variant_id",
-            "shopify_inventory_item_id", "shopify_synced",
+            "shopify_inventory_item_id", "shopify_synced", "pos_only",
         ]
         fields = [c for c in cols if c in data]
         placeholders = ", ".join("?" * len(fields))
@@ -285,8 +449,8 @@ class DatabaseManager:
             "sku", "barcode", "name", "description", "category_id",
             "price", "cost", "quantity", "min_quantity", "unit",
             "tax_rate", "image_path", "shopify_id", "shopify_variant_id",
-            "shopify_inventory_item_id", "shopify_synced", "last_synced",
-            "active", "updated_at",
+            "shopify_inventory_item_id", "shopify_synced", "has_variants",
+            "pos_only", "last_synced", "active", "updated_at",
         ]
         fields = [k for k in data if k in allowed]
         sets = ", ".join(f"{f} = ?" for f in fields)
@@ -448,12 +612,13 @@ class DatabaseManager:
             for item in items:
                 conn.execute(
                     """INSERT INTO sale_items
-                       (sale_id, product_id, product_name, sku, quantity,
+                       (sale_id, product_id, variant_id, product_name, sku, quantity,
                         unit_price, discount_percent, total)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         sale_id,
                         item.get("product_id"),
+                        item.get("variant_id"),
                         item["product_name"],
                         item.get("sku", ""),
                         item["quantity"],
@@ -462,8 +627,28 @@ class DatabaseManager:
                         item["total"],
                     ),
                 )
-                # Deduct stock
-                if item.get("product_id"):
+                # Deduct variant stock if variant_id present, else deduct product stock
+                if item.get("variant_id"):
+                    row = conn.execute(
+                        "SELECT quantity FROM product_variants WHERE id = ?",
+                        (item["variant_id"],),
+                    ).fetchone()
+                    if row:
+                        before = row["quantity"]
+                        after = before - item["quantity"]
+                        conn.execute(
+                            "UPDATE product_variants SET quantity = ?, updated_at = ? WHERE id = ?",
+                            (after, datetime.now().isoformat(), item["variant_id"]),
+                        )
+                        conn.execute(
+                            """INSERT INTO inventory_log
+                               (product_id, change_type, quantity_change,
+                                quantity_before, quantity_after, reference_id)
+                               VALUES (?, 'sale', ?, ?, ?, ?)""",
+                            (item["product_id"], -item["quantity"],
+                             before, after, sale_data.get("invoice_number")),
+                        )
+                elif item.get("product_id"):
                     row = conn.execute(
                         "SELECT quantity FROM products WHERE id = ?",
                         (item["product_id"],),
@@ -483,7 +668,6 @@ class DatabaseManager:
                             (item["product_id"], -item["quantity"],
                              before, after, sale_data.get("invoice_number")),
                         )
-
             # Update customer totals
             if sale_data.get("customer_id"):
                 conn.execute(
@@ -618,7 +802,10 @@ class DatabaseManager:
 
     def get_unsynced_products(self) -> List[Dict]:
         rows = self._execute(
-            "SELECT * FROM products WHERE (shopify_synced = 0 OR shopify_synced IS NULL) AND active = 1"
+            """SELECT * FROM products
+               WHERE (shopify_synced = 0 OR shopify_synced IS NULL)
+                 AND active = 1
+                 AND (pos_only = 0 OR pos_only IS NULL)"""
         ).fetchall()
         return [dict(r) for r in rows]
 

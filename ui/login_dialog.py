@@ -59,14 +59,20 @@ class LoginDialog(QDialog):
 
         logo_path = self.config.get("logo_path", "")
         if logo_path and os.path.exists(logo_path):
-            logo_lbl = QLabel()
-            pix = QPixmap(logo_path).scaled(
-                160, 70, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            logo_lbl.setPixmap(pix)
-            logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            banner_layout.addWidget(logo_lbl)
+            pix = QPixmap(logo_path)
+            if not pix.isNull():
+                logo_lbl = QLabel()
+                logo_lbl.setPixmap(pix.scaled(
+                    160, 70, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+                logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                banner_layout.addWidget(logo_lbl)
+            else:
+                icon_lbl = QLabel("🏪")
+                icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                icon_lbl.setStyleSheet("font-size: 48px; background: transparent;")
+                banner_layout.addWidget(icon_lbl)
         else:
             icon_lbl = QLabel("🏪")
             icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)

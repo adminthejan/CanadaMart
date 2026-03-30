@@ -35,12 +35,16 @@ def build_splash(config: AppConfig) -> QSplashScreen:
 
     logo_path = config.get("logo_path", "")
     if logo_path and os.path.exists(logo_path):
-        logo = QPixmap(logo_path).scaled(
-            200, 80, Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        painter.drawPixmap((480 - logo.width()) // 2, 40, logo)
-        y_start = 140
+        logo = QPixmap(logo_path)
+        if not logo.isNull():
+            logo = logo.scaled(
+                200, 80, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            painter.drawPixmap((480 - logo.width()) // 2, 40, logo)
+            y_start = 140
+        else:
+            y_start = 80
     else:
         y_start = 80
 
@@ -78,6 +82,10 @@ def main():
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 
     app = QApplication(sys.argv)
+
+    # Allow Ctrl+C to cleanly quit instead of causing SIGABRT
+    import signal
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
     app.setApplicationName("CanadaMart POS")
     app.setOrganizationName("CanadaMart")
     app.setStyle("Fusion")
@@ -113,17 +121,17 @@ def main():
         """Build and show main window for the authenticated user."""
         window = MainWindow(config, db, shopify_service, current_user=user)
 
-        if shopify_service.worker:
-            shopify_service.worker.status_changed.connect(
-                lambda txt: window.set_shopify_status(txt, "error" not in txt.lower())
-            )
-            shopify_service.worker.sync_error.connect(
-                lambda err: window.set_shopify_status(f"Sync error: {err[:40]}", False)
-            )
-
         if config.get("shopify_enabled", False):
             window.set_shopify_status("Shopify enabled – starting sync…", True)
             shopify_service.start()
+            # Connect signals AFTER start() so the worker object exists.
+            if shopify_service.worker:
+                shopify_service.worker.status_changed.connect(
+                    lambda txt: window.set_shopify_status(txt, "error" not in txt.lower())
+                )
+                shopify_service.worker.sync_error.connect(
+                    lambda err: window.set_shopify_status(f"Sync error: {err[:40]}", False)
+                )
         else:
             window.set_shopify_status("Shopify not configured", False)
 

@@ -12,21 +12,32 @@ from PyQt6.QtWidgets import (
     QButtonGroup, QDialogButtonBox, QSizePolicy, QTextEdit,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QFont, QColor, QPalette, QKeySequence, QShortcut
+from PyQt6.QtGui import QFont, QColor, QPalette, QKeySequence, QShortcut, QBrush
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Data model
 # ═══════════════════════════════════════════════════════════════════════════
 class CartItem:
-    def __init__(self, product: dict, quantity: int = 1):
+    def __init__(self, product: dict, quantity: int = 1,
+                 variant: Optional[dict] = None):
         self.product_id = product["id"]
         self.product_name = product["name"]
-        self.sku = product.get("sku", "") or ""
-        self.unit_price = float(product["price"])
+        self.variant_id: Optional[int] = variant["id"] if variant else None
+        self.variant_name: Optional[str] = variant["name"] if variant else None
+        self.sku = (variant or product).get("sku", "") or ""
+        self.unit_price = float((variant or product)["price"])
         self.quantity = quantity
         self.discount_percent = 0.0
-        self.stock_available = int(product.get("quantity", 9999))
+        self.stock_available = int(
+            (variant or product).get("quantity", 9999)
+        )
+
+    @property
+    def display_name(self) -> str:
+        if self.variant_name:
+            return f"{self.product_name}  [{self.variant_name}]"
+        return self.product_name
 
     @property
     def line_total(self) -> float:
@@ -74,7 +85,7 @@ class ProductCard(QPushButton):
         price_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(price_lbl)
 
-        qty = int(self.product.get("quantity", 0))
+        qty = int(self.product.get("total_stock") if self.product.get("total_stock") is not None else self.product.get("quantity", 0))
         stock_lbl = QLabel(f"Stock: {qty}")
         if qty <= 0:
             stock_lbl.setObjectName("ProductCardStockLow")
@@ -85,6 +96,12 @@ class ProductCard(QPushButton):
             stock_lbl.setObjectName("ProductCardStock")
         stock_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(stock_lbl)
+
+        if self.product.get("has_variants"):
+            var_lbl = QLabel("▾ variants")
+            var_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            var_lbl.setStyleSheet("color:#60a5fa; font-size:10px; font-weight:600;")
+            layout.addWidget(var_lbl)
 
         if qty <= 0:
             self.setEnabled(False)
@@ -207,6 +224,83 @@ class _NumPad(QWidget):
 
     def reset(self):
         self._clear_input()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Variant picker dialog
+# ═══════════════════════════════════════════════════════════════════════════
+class VariantPickerDialog(QDialog):
+    """Touch-friendly dialog to pick a product variant before adding to cart."""
+
+    variant_selected = pyqtSignal(dict)   # emits the chosen variant dict
+
+    def __init__(self, product: dict, variants: list, currency_fn, parent=None):
+        super().__init__(parent)
+        self.product = product
+        self.variants = variants
+        self.currency_fn = currency_fn
+        self.setWindowTitle(f"Select Variant – {product['name']}")
+        self.setMinimumSize(420, 380)
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        lbl = QLabel(f"<b>{self.product['name']}</b> – choose a variant:")
+        lbl.setStyleSheet("font-size:14px; color:#f1f5f9;")
+        layout.addWidget(lbl)
+
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Variant", "SKU", "Price", "Stock"])
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in [1, 2, 3]:
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.verticalHeader().hide()
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.doubleClicked.connect(self._select)
+        layout.addWidget(self._table)
+
+        self._table.setRowCount(len(self.variants))
+        for row, v in enumerate(self.variants):
+            qty = int(v.get("quantity", 0))
+            cells = [
+                v.get("name", ""),
+                v.get("sku", "") or "",
+                self.currency_fn(v.get("price", 0)),
+                "OUT" if qty <= 0 else str(qty),
+            ]
+            for col, val in enumerate(cells):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                if col == 3 and qty <= 0:
+                    item.setForeground(QBrush(QColor("#f87171")))
+                elif col == 3:
+                    item.setForeground(QBrush(QColor("#4ade80")))
+                self._table.setItem(row, col, item)
+            self._table.setRowHeight(row, 54)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        btns.rejected.connect(self.reject)
+        sel_btn = btns.addButton("Add to Cart", QDialogButtonBox.ButtonRole.AcceptRole)
+        sel_btn.setMinimumHeight(48)
+        sel_btn.setObjectName("SuccessBtn")
+        sel_btn.clicked.connect(self._select)
+        layout.addWidget(btns)
+
+    def _select(self):
+        row = self._table.currentRow()
+        if 0 <= row < len(self.variants):
+            v = self.variants[row]
+            if int(v.get("quantity", 0)) <= 0:
+                QMessageBox.warning(self, "Out of Stock",
+                                    f"'{v['name']}' is out of stock.")
+                return
+            self.variant_selected.emit(v)
+            self.accept()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -530,6 +624,7 @@ class POSWidget(QWidget):
         self._order_disc_value: float = 0.0
 
         self._build_ui()
+        self._recalculate()          # apply correct currency symbol before any cart action
         self._load_data()
         self._setup_shortcuts()
 
@@ -773,7 +868,7 @@ class POSWidget(QWidget):
         all_btn.setChecked(True)
         all_btn.setMinimumHeight(42)
         all_btn.setStyleSheet("font-size:13px;")
-        all_btn.clicked.connect(lambda: self._filter_by_category(None, all_btn))
+        all_btn.clicked.connect(lambda checked=False: self._filter_by_category(None, all_btn))
         self._cat_layout.insertWidget(0, all_btn)
         self._cat_buttons = [all_btn]
 
@@ -840,9 +935,22 @@ class POSWidget(QWidget):
             self._filter_products(text)
 
     def _add_to_cart(self, product: dict):
+        # If the product has variants, show the picker first
+        if product.get("has_variants"):
+            variants = self.db.get_variants(product["id"])
+            if variants:
+                dlg = VariantPickerDialog(
+                    product, variants, self.config.format_currency, self
+                )
+                dlg.variant_selected.connect(
+                    lambda v: self._add_variant_to_cart(product, v)
+                )
+                dlg.exec()
+                return
+
         allow_neg = self.config.get("allow_negative_stock", False)
         for item in self.cart:
-            if item.product_id == product["id"]:
+            if item.product_id == product["id"] and item.variant_id is None:
                 if not allow_neg and item.quantity >= item.stock_available:
                     QMessageBox.warning(self, "Stock Limit", f"Only {item.stock_available} units available.")
                     return
@@ -851,10 +959,26 @@ class POSWidget(QWidget):
                 self._recalculate()
                 return
 
-        if not allow_neg and product.get("quantity", 0) <= 0:
+        if not allow_neg and (product.get("total_stock") if product.get("total_stock") is not None else product.get("quantity", 0)) <= 0:
             QMessageBox.warning(self, "Out of Stock", f"'{product['name']}' is out of stock.")
             return
         self.cart.append(CartItem(product))
+        self._refresh_cart_table()
+        self._recalculate()
+
+    def _add_variant_to_cart(self, product: dict, variant: dict):
+        allow_neg = self.config.get("allow_negative_stock", False)
+        for item in self.cart:
+            if item.product_id == product["id"] and item.variant_id == variant["id"]:
+                if not allow_neg and item.quantity >= item.stock_available:
+                    QMessageBox.warning(self, "Stock Limit", f"Only {item.stock_available} units available.")
+                    return
+                item.quantity += 1
+                self._refresh_cart_table()
+                self._recalculate()
+                return
+
+        self.cart.append(CartItem(product, variant=variant))
         self._refresh_cart_table()
         self._recalculate()
 
@@ -885,7 +1009,7 @@ class POSWidget(QWidget):
         sym = self.config.get("currency_symbol", "$")
         self._cart_table.setRowCount(len(self.cart))
         for row, item in enumerate(self.cart):
-            self._cart_table.setItem(row, 0, QTableWidgetItem(item.product_name))
+            self._cart_table.setItem(row, 0, QTableWidgetItem(item.display_name))
             qty_item = QTableWidgetItem(str(item.quantity))
             qty_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._cart_table.setItem(row, 1, qty_item)
@@ -972,9 +1096,10 @@ class POSWidget(QWidget):
             "status": "completed",
         }
         items_data = [
-            {"product_id": item.product_id, "product_name": item.product_name, "sku": item.sku,
-             "quantity": item.quantity, "unit_price": item.unit_price, "discount_percent": item.discount_percent,
-             "total": item.line_total}
+            {"product_id": item.product_id, "variant_id": item.variant_id,
+             "product_name": item.display_name, "sku": item.sku,
+             "quantity": item.quantity, "unit_price": item.unit_price,
+             "discount_percent": item.discount_percent, "total": item.line_total}
             for item in self.cart
         ]
 

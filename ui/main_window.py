@@ -123,11 +123,28 @@ class MainWindow(QMainWindow):
         self._status_user = QLabel(f"👤 {uname}  [{role.title()}]")
         self._status_user.setStyleSheet(f"color: {role_color}; font-size: 11px; font-weight: 600;")
 
+        # Pause / resume sync button – only visible when Shopify is enabled
+        self._sync_pause_btn = QPushButton("⏸  Pause Sync")
+        self._sync_pause_btn.setFixedHeight(22)
+        self._sync_pause_btn.setFlat(False)
+        self._sync_pause_btn.setStyleSheet(
+            "QPushButton { background: #1e293b; color: #94a3b8; border: 1px solid #334155; "
+            "border-radius: 4px; padding: 0 8px; font-size: 11px; } "
+            "QPushButton:hover { background: #334155; color: #f1f5f9; }"
+        )
+        self._sync_pause_btn.setToolTip("Pause the automatic background sync with Shopify")
+        self._sync_pause_btn.clicked.connect(self._toggle_sync_pause)
+
         self._statusbar.addWidget(self._status_user)
         self._statusbar.addWidget(QLabel("  |  "))
+        self._statusbar.addPermanentWidget(self._sync_pause_btn)
+        self._statusbar.addPermanentWidget(QLabel("  "))
         self._statusbar.addPermanentWidget(self._status_sync)
         self._statusbar.addPermanentWidget(QLabel("  |  "))
         self._statusbar.addPermanentWidget(self._status_time)
+
+        # Initialise button state
+        self._update_sync_pause_btn()
 
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
@@ -145,14 +162,15 @@ class MainWindow(QMainWindow):
 
         logo_path = self.config.get("logo_path", "")
         if logo_path and os.path.exists(logo_path):
-            logo_label = QLabel()
-            pix = QPixmap(logo_path).scaled(
-                140, 60, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            logo_label.setPixmap(pix)
-            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            logo_layout.addWidget(logo_label)
+            pix = QPixmap(logo_path)
+            if not pix.isNull():
+                logo_label = QLabel()
+                logo_label.setPixmap(pix.scaled(
+                    140, 60, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+                logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                logo_layout.addWidget(logo_label)
 
         app_title = QLabel(self.config.get("app_name", "CanadaMart POS"))
         app_title.setObjectName("AppTitle")
@@ -343,6 +361,55 @@ class MainWindow(QMainWindow):
         self._status_sync.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     # ------------------------------------------------------------------ #
+    #  Sync pause / resume                                                 #
+    # ------------------------------------------------------------------ #
+    @pyqtSlot()
+    def _toggle_sync_pause(self):
+        if not self.shopify_service:
+            return
+        if self.shopify_service.is_running:
+            # Pause – non-blocking so the UI stays responsive
+            self.shopify_service.pause()
+            self.set_shopify_status("Sync paused", False)
+        else:
+            # Resume – creates a fresh worker & thread
+            self.shopify_service.resume()
+            # Wire up the new worker's signals
+            worker = self.shopify_service.worker
+            if worker:
+                worker.status_changed.connect(
+                    lambda txt: self.set_shopify_status(txt, "error" not in txt.lower())
+                )
+                worker.sync_error.connect(
+                    lambda err: self.set_shopify_status(f"Sync error: {err[:40]}", False)
+                )
+            self.set_shopify_status("Sync resumed…", True)
+        self._update_sync_pause_btn()
+
+    def _update_sync_pause_btn(self):
+        """Show / hide the button and update its label to match actual state."""
+        enabled = self.config.get("shopify_enabled", False) and self.shopify_service is not None
+        self._sync_pause_btn.setVisible(enabled)
+        if not enabled:
+            return
+        if self.shopify_service.is_running:
+            self._sync_pause_btn.setText("⏸  Pause Sync")
+            self._sync_pause_btn.setToolTip("Pause the automatic background sync with Shopify")
+            self._sync_pause_btn.setStyleSheet(
+                "QPushButton { background: #1e293b; color: #94a3b8; border: 1px solid #334155; "
+                "border-radius: 4px; padding: 0 8px; font-size: 11px; } "
+                "QPushButton:hover { background: #334155; color: #f1f5f9; }"
+            )
+        else:
+            self._sync_pause_btn.setText("▶  Resume Sync")
+            self._sync_pause_btn.setToolTip("Resume the automatic background sync with Shopify")
+            self._sync_pause_btn.setStyleSheet(
+                "QPushButton { background: #1e293b; color: #f59e0b; border: 1px solid #f59e0b; "
+                "border-radius: 4px; padding: 0 8px; font-size: 11px; } "
+                "QPushButton:hover { background: #f59e0b; color: #0f172a; }"
+            )
+
+    # ------------------------------------------------------------------ #
     #  Settings reload                                                     #
     # ------------------------------------------------------------------ #
     @pyqtSlot()
@@ -355,6 +422,23 @@ class MainWindow(QMainWindow):
                 w.setText(self.config.get("app_name", "CanadaMart POS"))
             elif w.objectName() == "AppSubtitle":
                 w.setText(self.config.get("business_name", ""))
+        # Restart Shopify sync with the new settings
+        if self.shopify_service:
+            self.shopify_service.stop()
+            if self.config.get("shopify_enabled", False):
+                self.shopify_service.start()
+                # Reconnect the new worker's signals to the status bar
+                worker = self.shopify_service.worker
+                if worker:
+                    worker.status_changed.connect(
+                        lambda txt: self.set_shopify_status(txt, "error" not in txt.lower())
+                    )
+                    worker.sync_error.connect(
+                        lambda err: self.set_shopify_status(f"Sync error: {err[:40]}", False)
+                    )
+                self.set_shopify_status("Shopify enabled \u2013 sync starting\u2026", True)
+            else:
+                self.set_shopify_status("Shopify not configured", False)
         # Unload all modules: replace each loaded slot with a fresh placeholder
         for idx in list(self._modules_loaded.keys()):
             old = self._slot_widgets.get(idx)
@@ -369,6 +453,7 @@ class MainWindow(QMainWindow):
         role = self.current_user.get("role", "cashier")
         allowed = ROLE_ACCESS.get(role, {0})
         self._navigate(min(allowed))
+        self._update_sync_pause_btn()
 
     def closeEvent(self, event):
         if self.shopify_service:
