@@ -1,14 +1,16 @@
 """Receipt printer service – PyQt6 Windows native printing + PDF fallback."""
 import os
 import io
+import sys
 import tempfile
 from datetime import datetime
 from typing import List, Dict, Optional
 from pathlib import Path
 
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
-from PyQt6.QtGui import QTextDocument, QPainter
-from PyQt6.QtCore import QMarginsF, QSizeF
+from PyQt6.QtGui import QTextDocument, QPainter, QPageSize
+from PyQt6.QtCore import QMarginsF, QSizeF, QCoreApplication
+from PyQt6.QtWidgets import QApplication
 
 
 class ReceiptPrinter:
@@ -21,6 +23,15 @@ class ReceiptPrinter:
     def __init__(self, config):
         self.config = config
         self._printer = None
+        self._ensure_qt_app()
+    
+    def _ensure_qt_app(self):
+        """Ensure QApplication exists for PyQt6 printing."""
+        app = QApplication.instance()
+        if app is None:
+            # Create QApplication for non-GUI context
+            QApplication(sys.argv)
+
 
     # ================================================================ #
     #  PyQt6 Windows Native Printing (Primary Method)                 #
@@ -42,7 +53,7 @@ class ReceiptPrinter:
         try:
             # 1. Get system default printer
             default_printer_info = QPrinterInfo.defaultPrinter()
-            if not default_printer_info.isValid():
+            if not default_printer_info or not default_printer_info.printerName():
                 print("[Printer] No default printer found. Falling back to PDF.")
                 return False
 
@@ -56,8 +67,8 @@ class ReceiptPrinter:
             page_width_mm = 80
             page_height_mm = 150  # Default, will be dynamically calculated
             
-            printer.setPageSize(QPrinter.PageSize.Custom)
-            printer.setPageSizeMM(page_width_mm, page_height_mm)
+            # For QPrinter, use setPageSize with QPageSize
+            printer.setPageSize(QPageSize(QSizeF(page_width_mm, page_height_mm), QPageSize.Unit.Millimeter))
             
             # Set minimal margins for thermal receipt
             printer.setPageMargins(
@@ -293,8 +304,6 @@ class ReceiptPrinter:
                 
         return False
 
-        return False
-
     def save_pdf(self, sale: Dict, items: List[Dict],
                  customer: Optional[Dict] = None,
                  directory: str = None) -> Optional[str]:
@@ -344,7 +353,7 @@ class ReceiptPrinter:
             from PyQt6.QtCore import QByteArray, QBuffer
             
             default_printer_info = QPrinterInfo.defaultPrinter()
-            if not default_printer_info.isValid():
+            if not default_printer_info or not default_printer_info.printerName():
                 return False
 
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
@@ -354,8 +363,7 @@ class ReceiptPrinter:
             label_w = float(settings.get("barcode_label_width_mm", 50.0))
             label_h = float(settings.get("barcode_label_height_mm", 25.0))
             
-            printer.setPageSize(QPrinter.PageSize.Custom)
-            printer.setPageSizeMM(label_w, label_h)
+            printer.setPageSize(QPageSize(label_w, label_h, QPageSize.Unit.Millimeter))
             printer.setPageMargins(QMarginsF(2, 2, 2, 2))
             
             painter = QPainter()

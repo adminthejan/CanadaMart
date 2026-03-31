@@ -38,7 +38,7 @@ class AppConfig:
         "receipt_copies": 1,
         "receipt_paper_width": 80,  # mm
         # Printer
-        "printer_type": "none",  # none | escpos_usb | escpos_serial | escpos_network | pdf
+        "printer_type": "windows_native",  # none | windows_native | pdf | escpos_usb | escpos_serial | escpos_network
         "printer_port": "",
         "printer_baudrate": 9600,
         "printer_network_ip": "",
