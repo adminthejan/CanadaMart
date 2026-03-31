@@ -387,10 +387,11 @@ class CustomerSearchDialog(QDialog):
 class PaymentDialog(QDialog):
     """Handles payment with a touch numpad for cash entry."""
 
-    def __init__(self, total: float, config, parent=None):
+    def __init__(self, total: float, config, parent=None, db=None):
         super().__init__(parent)
         self.total = total
         self.config = config
+        self.db = db
         self.payment_method = "cash"
         self.amount_paid = total
         self.change = 0.0
@@ -478,6 +479,18 @@ class PaymentDialog(QDialog):
         self._print_receipt.setCheckable(True)
         self._print_receipt.setChecked(True)
         self._print_receipt.setMinimumHeight(48)
+        
+        # ✓ Show/hide based on auto-print setting
+        auto_print = True  # Default to True if no db
+        if self.db:
+            auto_print = self.db.get_setting("auto_print_receipt", "1") == "1"
+        
+        # If auto-print is OFF, show the checkbox so user can choose
+        if auto_print:
+            self._print_receipt.hide()  # Auto-printing is on, hide the button
+        else:
+            self._print_receipt.show()  # Auto-printing is off, let user decide
+            
         left.addWidget(self._print_receipt)
 
         ok_btn = QPushButton("✓  Complete Sale")
@@ -1091,7 +1104,7 @@ class POSWidget(QWidget):
         computed = getattr(self, "_computed", {})
         total = computed.get("total", 0)
 
-        dlg = PaymentDialog(total, self.config, self)
+        dlg = PaymentDialog(total, self.config, self, db=self.db)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -1127,11 +1140,28 @@ class POSWidget(QWidget):
         if self.shopify_service:
             self.shopify_service.sync_stock_after_sale(items_data)
 
-        if dlg.should_print:
+        self.config.set("invoice_next_number", int(invoice_number.replace(prefix, "")) + 1)
+
+        # ✓ CONFIGURABLE PRINTING: Respect auto-print receipt setting
+        auto_print = self.db.get_setting("auto_print_receipt", "1") == "1"
+        
+        if auto_print:
+            # Auto-print enabled: print immediately without user interaction
             from services.receipt_printer import ReceiptPrinter
             ReceiptPrinter(self.config).print_receipt(sale_data, items_data, self.selected_customer)
-
-        self.config.set("invoice_next_number", int(invoice_number.replace(prefix, "")) + 1)
+        else:
+            # Auto-print disabled: show optional print dialog
+            reply = QMessageBox(self)
+            reply.setWindowTitle("Receipt Ready")
+            reply.setText("Would you like to print a receipt for this sale?")
+            reply.setIcon(QMessageBox.Icon.Question)
+            reply.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            reply.button(QMessageBox.StandardButton.Yes).setText("🖨️  Print Receipt")
+            reply.button(QMessageBox.StandardButton.No).setText("Skip")
+            
+            if reply.exec() == QMessageBox.StandardButton.Yes:
+                from services.receipt_printer import ReceiptPrinter
+                ReceiptPrinter(self.config).print_receipt(sale_data, items_data, self.selected_customer)
 
         sym = self.config.get("currency_symbol", "$")
         msg = QMessageBox(self)

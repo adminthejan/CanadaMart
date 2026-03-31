@@ -172,6 +172,18 @@ class SettingsWidget(QWidget):
         self._receipt_show_barcode = QCheckBox("Show barcode on receipt")
         form.addRow("", self._receipt_show_barcode)
 
+        # ═══ PRINTING & AUTO-PRINT ═══
+        print_group = QGroupBox("Receipt Printing")
+        pform = QFormLayout(print_group)
+        
+        self._auto_print_receipt = QCheckBox("Enable Auto-Print Receipt on Checkout")
+        self._auto_print_receipt.setToolTip(
+            "When enabled, receipts print automatically upon sale completion.\n"
+            "When disabled, customer can request a receipt after the sale."
+        )
+        pform.addRow("", self._auto_print_receipt)
+        
+        layout.addWidget(print_group)
         layout.addLayout(form)
 
         # Invoice
@@ -573,6 +585,10 @@ class SettingsWidget(QWidget):
         self._receipt_paper_width.setCurrentText(str(c.get("receipt_paper_width", 80)))
         self._receipt_show_logo.setChecked(bool(c.get("receipt_show_logo", True)))
         self._receipt_show_barcode.setChecked(bool(c.get("receipt_show_barcode", False)))
+        
+        # ✓ Auto-print setting – default to True
+        self._auto_print_receipt.setChecked(self.db.get_setting("auto_print_receipt", "1") == "1")
+        
         self._inv_prefix.setText(c.get("invoice_prefix", "INV"))
         self._inv_next.setValue(int(c.get("invoice_next_number", 1000)))
         self._inv_show_sku.setChecked(bool(c.get("invoice_show_sku", True)))
@@ -723,6 +739,9 @@ class SettingsWidget(QWidget):
         self.db.set_setting("barcode_show_price", "1" if self._bc_show_price.isChecked() else "0")
         self.db.set_setting("barcode_show_variant", "1" if self._bc_show_variant.isChecked() else "0")
         self.db.set_setting("barcode_default_copies", str(self._bc_default_copies.value()))
+        
+        # ✓ Save auto-print receipt setting
+        self.db.set_setting("auto_print_receipt", "1" if self._auto_print_receipt.isChecked() else "0")
 
         QMessageBox.information(self, "Settings Saved", "All settings have been saved successfully.")
         self.settings_saved.emit()

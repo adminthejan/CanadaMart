@@ -1,4 +1,4 @@
-"""Receipt printer service – ESC/POS thermal + PDF fallback."""
+"""Receipt printer service – PyQt6 Windows native printing + PDF fallback."""
 import os
 import io
 import tempfile
@@ -6,70 +6,293 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from pathlib import Path
 
+from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
+from PyQt6.QtGui import QTextDocument, QPainter
+from PyQt6.QtCore import QMarginsF, QSizeF
+
 
 class ReceiptPrinter:
     """
     Handles receipt printing via:
-      - ESC/POS USB / Serial / Network thermal printers
-      - PDF file generation (reportlab) as save/email fallback
+      - PyQt6 Windows native printer (QPrinter → default printer)
+      - PDF file generation (reportlab) as fallback
     """
 
     def __init__(self, config):
         self.config = config
         self._printer = None
 
-    # ------------------------------------------------------------------ #
-    #  ESC/POS connection helpers                                          #
-    # ------------------------------------------------------------------ #
-    def _get_escpos_printer(self):
-        ptype = self.config.get("printer_type", "none")
+    # ================================================================ #
+    #  PyQt6 Windows Native Printing (Primary Method)                 #
+    # ================================================================ #
+    def print_to_windows_default(self, receipt_data: Dict, items: List[Dict],
+                                  customer: Optional[Dict] = None) -> bool:
+        """
+        Print directly to the Windows default printer using PyQt6 QPrinter.
+        No print dialog - automatic, seamless printing.
+        
+        Args:
+            receipt_data: Sale information dict
+            items: List of sale items
+            customer: Customer dict (optional)
+            
+        Returns:
+            True on success, False on failure
+        """
         try:
-            from escpos import printer as ep
-            if ptype == "escpos_usb":
-                vendor = int(self.config.get("printer_usb_vendor", "0x04b8"), 16)
-                product = int(self.config.get("printer_usb_product", "0x0202"), 16)
-                return ep.Usb(vendor, product)
-            elif ptype == "escpos_serial":
-                port = self.config.get("printer_port", "COM1")
-                baud = int(self.config.get("printer_baudrate", 9600))
-                return ep.Serial(devfile=port, baudrate=baud)
-            elif ptype == "escpos_network":
-                ip = self.config.get("printer_network_ip", "")
-                port = int(self.config.get("printer_network_port", 9100))
-                return ep.Network(ip, port)
-        except ImportError:
-            print("[Printer] python-escpos not installed.")
-        except Exception as e:
-            print(f"[Printer] Connection error: {e}")
-        return None
+            # 1. Get system default printer
+            default_printer_info = QPrinterInfo.defaultPrinter()
+            if not default_printer_info.isValid():
+                print("[Printer] No default printer found. Falling back to PDF.")
+                return False
 
-    # ------------------------------------------------------------------ #
-    #  Public API                                                          #
-    # ------------------------------------------------------------------ #
+            # 2. Configure QPrinter for thermal receipt (80mm width)
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setPrinterName(default_printer_info.printerName())
+            
+            # Set custom page size for 80mm thermal roll
+            # Standard thermal paper: 80mm width ≈ 3.15 inches
+            # Height adjusts based on content
+            page_width_mm = 80
+            page_height_mm = 150  # Default, will be dynamically calculated
+            
+            printer.setPageSize(QPrinter.PageSize.Custom)
+            printer.setPageSizeMM(page_width_mm, page_height_mm)
+            
+            # Set minimal margins for thermal receipt
+            printer.setPageMargins(
+                QMarginsF(2, 2, 2, 2)  # 2mm margins
+            )
+            
+            # 3. Generate receipt HTML
+            html_content = self._generate_receipt_html(receipt_data, items, customer)
+            
+            # 4. Create QTextDocument and render to printer
+            doc = QTextDocument()
+            doc.setHtml(html_content)
+            
+            # Set document width to match printer width
+            doc.setPageSize(
+                QSizeF(
+                    printer.pageRect(QPrinter.Unit.Millimeter).width(),
+                    printer.pageRect(QPrinter.Unit.Millimeter).height()
+                )
+            )
+            
+            # 5. Print the document
+            doc.print(printer)
+            
+            print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
+            return True
+            
+        except Exception as e:
+            print(f"[Printer] PyQt6 native printing error: {e}")
+            return False
+
+    def _generate_receipt_html(self, sale: Dict, items: List[Dict],
+                                customer: Optional[Dict]) -> str:
+        """Generate HTML content for receipt - formatted for thermal printer."""
+        
+        sym = self.config.get("currency_symbol", "$")
+        bname = self.config.get("business_name", "CanadaMart")
+        tagline = self.config.get("business_tagline", "")
+        addr = self.config.get("business_address", "")
+        phone = self.config.get("business_phone", "")
+        header = self.config.get("receipt_header", "")
+        footer = self.config.get("receipt_footer", "Thank you!")
+        
+        # Format datetime
+        dt = datetime.now().strftime("%d-%b-%Y  %H:%M")
+        
+        html = f"""
+        <html>
+        <head>
+            <style>
+                body {{
+                    font-family: 'Courier New', monospace;
+                    margin: 0;
+                    padding: 4px;
+                    width: 80mm;
+                    line-height: 1.2;
+                    font-size: 11px;
+                }}
+                .center {{ text-align: center; }}
+                .right {{ text-align: right; }}
+                .left {{ text-align: left; }}
+                h1 {{ font-size: 16px; font-weight: bold; margin: 2px 0; }}
+                h2 {{ font-size: 12px; margin: 2px 0; }}
+                .divider {{ border-bottom: 1px solid #000; margin: 4px 0; }}
+                table {{ width: 100%; border-collapse: collapse; }}
+                td {{ padding: 2px 0; }}
+                .header {{ font-weight: bold; border-bottom: 1px solid #000; margin-bottom: 4px; }}
+                .total {{ font-size: 14px; font-weight: bold; margin: 4px 0; }}
+            </style>
+        </head>
+        <body>
+            <!-- HEADER -->
+            <div class="center">
+                <h1>{bname}</h1>
+        """
+        
+        if tagline:
+            html += f"<div>{tagline}</div>"
+        if addr:
+            html += f"<div>{addr}</div>"
+        if phone:
+            html += f"<div>{phone}</div>"
+        if header:
+            html += f"<div>{header}</div>"
+            
+        html += """
+            </div>
+            <div class="divider"></div>
+        """
+        
+        # INVOICE DETAILS
+        html += f"""
+            <div class="left">
+                <strong>Invoice :</strong> {sale.get('invoice_number', '')}<br>
+                <strong>Date    :</strong> {dt}<br>
+        """
+        
+        if customer:
+            html += f"<strong>Customer:</strong> {customer.get('name', '')}<br>"
+            if customer.get("mobile"):
+                html += f"<strong>Mobile  :</strong> {customer.get('mobile')}<br>"
+                
+        if sale.get("notes"):
+            html += f"<strong>Notes   :</strong> {sale['notes']}<br>"
+            
+        html += """
+            </div>
+            <div class="divider"></div>
+        """
+        
+        # ITEMS HEADER
+        html += """
+            <table class="header">
+                <tr>
+                    <td style="width: 55%;">Item</td>
+                    <td style="width: 15%; text-align: right;">Qty</td>
+                    <td style="width: 30%; text-align: right;">Amount</td>
+                </tr>
+            </table>
+            <div class="divider"></div>
+        """
+        
+        # ITEMS
+        for item in items:
+            name = item["product_name"][:50]  # Truncate long names
+            qty = item["quantity"]
+            total = item["total"]
+            html += f"""
+            <table>
+                <tr>
+                    <td style="width: 55%;">{name}</td>
+                    <td style="width: 15%; text-align: right;">{int(qty)}</td>
+                    <td style="width: 30%; text-align: right;">{sym}{total:.2f}</td>
+                </tr>
+            """
+            
+            if item.get("discount_percent", 0) > 0:
+                html += f"""
+                <tr>
+                    <td colspan="3" style="font-size: 10px; color: #666;">
+                        &nbsp;&nbsp;Discount: {item['discount_percent']:.0f}%
+                    </td>
+                </tr>
+                """
+            
+            html += "</table>"
+        
+        html += """
+            <div class="divider"></div>
+        """
+        
+        # TOTALS
+        subtotal = sale.get("subtotal", 0)
+        tax = sale.get("tax_amount", 0)
+        disc = sale.get("discount_amount", 0)
+        total = sale.get("total", 0)
+        paid = sale.get("amount_paid", total)
+        change = sale.get("change_amount", 0)
+        method = sale.get("payment_method", "cash").upper()
+        
+        html += "<div class='right'>"
+        
+        if disc > 0:
+            html += f"<div>Subtotal : {sym}{subtotal:.2f}</div>"
+            html += f"<div>Discount : -{sym}{disc:.2f}</div>"
+            
+        if tax > 0:
+            tax_name = self.config.get("tax_name", "Tax")
+            html += f"<div>{tax_name}     : {sym}{tax:.2f}</div>"
+        
+        html += f"""
+            <div class="divider"></div>
+            <div class="total">TOTAL: {sym}{total:.2f}</div>
+            <div>Paid ({method}): {sym}{paid:.2f}</div>
+        """
+        
+        if change > 0:
+            html += f"<div>Change : {sym}{change:.2f}</div>"
+            
+        html += """
+            </div>
+            <div class="divider"></div>
+        """
+        
+        # FOOTER & BARCODE
+        html += f"""
+            <div class="center">
+                <div>{footer}</div>
+                <div style="margin-top: 8px; font-size: 10px;">
+                    {datetime.now().strftime('%d-%b-%Y %H:%M:%S')}
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return html
+
+    # ================================================================ #
+    #  Public API                                                      #
+    # ================================================================ #
     def print_receipt(self, sale: Dict, items: List[Dict],
                       customer: Optional[Dict] = None) -> bool:
         """
-        Print a receipt. Returns True on success.
-        Falls back to PDF if ESC/POS fails.
+        Print a receipt. 
+        Primary: Uses PyQt6 Windows native printing (QPrinter)
+        Fallback: PDF generation if native printing fails
+        
+        Returns True on success.
         """
-        ptype = self.config.get("printer_type", "none")
+        ptype = self.config.get("printer_type", "windows_native")
         copies = int(self.config.get("receipt_copies", 1))
 
         if ptype == "none":
-            return True  # silent
+            return True  # Silent success - printing disabled
 
-        if ptype in ("escpos_usb", "escpos_serial", "escpos_network"):
+        # Try PyQt6 Windows native printing first
+        if ptype in ("windows_native", "default", ""):
             for _ in range(copies):
-                ok = self._print_escpos(sale, items, customer)
-                if not ok:
-                    break
-            return ok
+                ok = self.print_to_windows_default(sale, items, customer)
+                if ok:
+                    return True
+            # Fall back to PDF if native fails
+            print("[Printer] Native printing failed, falling back to PDF.")
+            ptype = "pdf"
 
+        # PDF fallback
         if ptype == "pdf":
             path = self._generate_pdf(sale, items, customer)
             if path:
                 self._open_pdf(path)
                 return True
+                
+        return False
+
         return False
 
     def save_pdf(self, sale: Dict, items: List[Dict],
@@ -78,75 +301,106 @@ class ReceiptPrinter:
         """Save receipt as PDF and return file path."""
         return self._generate_pdf(sale, items, customer, directory)
 
-    def print_barcode_label(self, barcode_image, product_name: str, price_str: str, copies: int = 1, settings: dict = None) -> bool:
+    def print_barcode_label(self, barcode_image, product_name: str, 
+                            price_str: str, copies: int = 1, 
+                            settings: dict = None) -> bool:
         """
-        Prints a barcode label.
-        - ESC/POS: Uses the image printing functionality.
-        - PDF: Falls back to PDF generation.
+        Prints a barcode label via native printer or PDF fallback.
         """
         settings = settings or {}
-        ptype = self.config.get("printer_type", "none")
+        ptype = self.config.get("printer_type", "windows_native")
+        
         if ptype == "none":
-            return True
+            return True  # Silent success
 
-        if ptype in ("escpos_usb", "escpos_serial", "escpos_network"):
-            return self._print_barcode_escpos(barcode_image, settings, copies)
+        # Try native printing first
+        if ptype in ("windows_native", "default", ""):
+            try:
+                ok = self._print_barcode_native(barcode_image, product_name, 
+                                               price_str, settings, copies)
+                if ok:
+                    return True
+            except Exception as e:
+                print(f"[Printer] Native barcode printing failed: {e}")
+            
+            print("[Printer] Native barcode printing failed, falling back to PDF.")
+            ptype = "pdf"
 
+        # PDF fallback
         if ptype == "pdf":
             path = self._generate_barcode_pdf(barcode_image, settings, copies)
             if path:
                 self._open_pdf(path)
                 return True
+                
         return False
 
-    def _print_barcode_escpos(self, barcode_image, settings: dict, copies: int) -> bool:
-        p = self._get_escpos_printer()
-        if not p:
-            return False
+    def _print_barcode_native(self, barcode_image, product_name: str,
+                             price_str: str, settings: dict, 
+                             copies: int) -> bool:
+        """Print barcode label using PyQt6 native printer."""
         try:
-            p.set(align="center")
+            from PyQt6.QtGui import QImage, QPixmap
+            from PyQt6.QtCore import QByteArray, QBuffer
             
-            from PIL import Image
-            cols = int(settings.get("barcode_columns_per_row", 1))
-            # Assume ~8 dots/mm for thermal printers
-            gap_x_px = int(float(settings.get("barcode_gap_x_mm", 2.0)) * 8)
-            
-            single_w = barcode_image.width
-            single_h = barcode_image.height
-            row_w = (single_w * cols) + (max(0, gap_x_px) * (cols - 1))
-            row_image = Image.new("RGB", (row_w, single_h), "white")
-            for i in range(cols):
-                row_image.paste(barcode_image, (i * (single_w + max(0, gap_x_px)), 0))
-                
-            rows = copies // cols
-            leftover = copies % cols
-            
-            for _ in range(rows):
-                p.image(row_image)
-            
-            if leftover > 0:
-                last_row = Image.new("RGB", (row_w, single_h), "white")
-                for i in range(leftover):
-                    last_row.paste(barcode_image, (i * (single_w + max(0, gap_x_px)), 0))
-                p.image(last_row)
-            
-            p.cut()
-            return True
-        except Exception as e:
-            print(f"[Printer] ESC/POS barcode error: {e}")
-            return False
-        finally:
-            try:
-                p.close()
-            except Exception:
-                pass
+            default_printer_info = QPrinterInfo.defaultPrinter()
+            if not default_printer_info.isValid():
+                return False
 
-    def _generate_barcode_pdf(self, barcode_image, settings: dict, copies: int) -> Optional[str]:
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setPrinterName(default_printer_info.printerName())
+            
+            # Label size (e.g., 50x25mm for barcode labels)
+            label_w = float(settings.get("barcode_label_width_mm", 50.0))
+            label_h = float(settings.get("barcode_label_height_mm", 25.0))
+            
+            printer.setPageSize(QPrinter.PageSize.Custom)
+            printer.setPageSizeMM(label_w, label_h)
+            printer.setPageMargins(QMarginsF(2, 2, 2, 2))
+            
+            painter = QPainter()
+            if not painter.begin(printer):
+                return False
+            
+            x_offset = 5
+            y_offset = 2
+            
+            for _ in range(copies):
+                # Draw barcode image
+                if isinstance(barcode_image, str):
+                    pixmap = QPixmap(barcode_image)
+                else:
+                    pixmap = QPixmap.fromImage(barcode_image)
+                
+                painter.drawPixmap(x_offset, y_offset, 
+                                 int(label_w - 10), int(label_h - 10), pixmap)
+                
+                # Draw product info
+                painter.drawText(
+                    5, int(label_h - 8), int(label_w - 10), 5,
+                    0, f"{product_name} {price_str}"
+                )
+                
+                # Page break for next copy
+                if _ < copies - 1:
+                    painter.end()
+                    if not painter.begin(printer):
+                        return False
+            
+            painter.end()
+            print(f"[Printer] Barcode labels printed ({copies} copies)")
+            return True
+            
+        except Exception as e:
+            print(f"[Printer] Native barcode printing error: {e}")
+            return False
+    def _generate_barcode_pdf(self, barcode_image, settings: dict, 
+                             copies: int) -> Optional[str]:
+        """Generate PDF barcode labels."""
         try:
             from reportlab.lib.units import mm
             from reportlab.pdfgen import canvas
             from reportlab.lib.utils import ImageReader
-            import tempfile, os
             
             fd, path = tempfile.mkstemp(suffix=".pdf")
             os.close(fd)
@@ -158,7 +412,8 @@ class ReceiptPrinter:
             img_reader = ImageReader(barcode_image)
             
             for _ in range(copies):
-                c.drawImage(img_reader, 0, 0, width=width_mm * mm, height=height_mm * mm, preserveAspectRatio=True, anchor='c')
+                c.drawImage(img_reader, 0, 0, width=width_mm * mm, 
+                           height=height_mm * mm, preserveAspectRatio=True, anchor='c')
                 c.showPage()
                 
             c.save()
@@ -166,134 +421,13 @@ class ReceiptPrinter:
         except Exception as e:
             print(f"[Printer] PDF barcode error: {e}")
             return None
-
-    # ------------------------------------------------------------------ #
-    #  ESC/POS rendering                                                   #
-    # ------------------------------------------------------------------ #
-    def _print_escpos(self, sale: Dict, items: List[Dict],
-                      customer: Optional[Dict]) -> bool:
-        p = self._get_escpos_printer()
-        if not p:
-            return False
-        try:
-            width = int(self.config.get("receipt_paper_width", 80))
-            chars = 48 if width >= 80 else 32
-
-            def divider():
-                p.text("-" * chars + "\n")
-
-            # Header
-            bname = self.config.get("business_name", "")
-            p.set(align="center", bold=True, height=2, width=2)
-            p.text(bname + "\n")
-            p.set(align="center", bold=False, height=1, width=1)
-
-            tagline = self.config.get("business_tagline", "")
-            if tagline:
-                p.text(tagline + "\n")
-
-            addr = self.config.get("business_address", "")
-            phone = self.config.get("business_phone", "")
-            if addr:
-                p.text(addr + "\n")
-            if phone:
-                p.text(phone + "\n")
-
-            header_txt = self.config.get("receipt_header", "")
-            if header_txt:
-                p.text(header_txt + "\n")
-
-            divider()
-
-            # Invoice details
-            dt = datetime.now().strftime("%d-%b-%Y  %H:%M")
-            p.set(align="left")
-            p.text(f"Invoice : {sale.get('invoice_number', '')}\n")
-            p.text(f"Date    : {dt}\n")
-            if customer:
-                p.text(f"Customer: {customer.get('name', '')}\n")
-                p.text(f"Mobile  : {customer.get('mobile', '')}\n")
-            if sale.get("notes"):
-                p.text(f"Notes   : {sale['notes']}\n")
-            divider()
-
-            # Items header
-            sym = self.config.get("currency_symbol", "$")
-            col_w = chars - 12
-            p.set(bold=True)
-            p.text(f"{'Item':<{col_w}} {'Qty':>3} {'Amount':>8}\n")
-            p.set(bold=False)
-            divider()
-
-            # Items
-            for item in items:
-                name = item["product_name"][:col_w]
-                qty = item["quantity"]
-                total = item["total"]
-                p.text(f"{name:<{col_w}} {qty:>3} {sym}{total:>7.2f}\n")
-                if item.get("discount_percent", 0) > 0:
-                    p.text(f"  Discount: {item['discount_percent']:.0f}%\n")
-
-            divider()
-
-            # Totals
-            p.set(align="right")
-            subtotal = sale.get("subtotal", 0)
-            tax = sale.get("tax_amount", 0)
-            disc = sale.get("discount_amount", 0)
-            total = sale.get("total", 0)
-
-            if disc > 0:
-                p.text(f"Subtotal : {sym}{subtotal:.2f}\n")
-                p.text(f"Discount : -{sym}{disc:.2f}\n")
-            if tax > 0:
-                tname = self.config.get("tax_name", "Tax")
-                p.text(f"{tname}     : {sym}{tax:.2f}\n")
-
-            p.set(align="right", bold=True, height=2, width=2)
-            p.text(f"TOTAL: {sym}{total:.2f}\n")
-            p.set(align="right", bold=False, height=1, width=1)
-
-            method = sale.get("payment_method", "cash").upper()
-            paid = sale.get("amount_paid", total)
-            change = sale.get("change_amount", 0)
-            p.text(f"Paid ({method}): {sym}{paid:.2f}\n")
-            if change > 0:
-                p.text(f"Change : {sym}{change:.2f}\n")
-
-            divider()
-
-            # Footer
-            footer = self.config.get("receipt_footer", "Thank you!")
-            p.set(align="center")
-            p.text(footer + "\n\n")
-
-            # Barcode (invoice number)
-            if self.config.get("receipt_show_barcode", False):
-                try:
-                    inv = sale.get("invoice_number", "")
-                    if inv:
-                        p.barcode(inv, "CODE128", 64, 2, "BELOW", "B")
-                except Exception:
-                    pass
-
-            p.cut()
-            return True
-        except Exception as e:
-            print(f"[Printer] ESC/POS error: {e}")
-            return False
-        finally:
-            try:
-                p.close()
-            except Exception:
-                pass
-
-    # ------------------------------------------------------------------ #
-    #  PDF rendering                                                       #
-    # ------------------------------------------------------------------ #
+    # ================================================================ #
+    #  PDF Fallback Generation                                         #
+    # ================================================================ #
     def _generate_pdf(self, sale: Dict, items: List[Dict],
                       customer: Optional[Dict],
                       directory: str = None) -> Optional[str]:
+        """Generate PDF receipt as fallback."""
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.units import mm
@@ -335,14 +469,16 @@ class ReceiptPrinter:
         left = ParagraphStyle("left", parent=styles["Normal"],
                               alignment=TA_LEFT, fontSize=8)
         title_s = ParagraphStyle("title", parent=styles["Normal"],
-                                 alignment=TA_CENTER, fontSize=12, fontName="Helvetica-Bold")
+                                 alignment=TA_CENTER, fontSize=12, 
+                                 fontName="Helvetica-Bold")
         total_s = ParagraphStyle("total", parent=styles["Normal"],
-                                 alignment=TA_RIGHT, fontSize=11, fontName="Helvetica-Bold")
+                                 alignment=TA_RIGHT, fontSize=11, 
+                                 fontName="Helvetica-Bold")
 
         sym = self.config.get("currency_symbol", "$")
         story = []
 
-        # Business name
+        # Business info
         story.append(Paragraph(self.config.get("business_name", ""), title_s))
         if self.config.get("business_tagline"):
             story.append(Paragraph(self.config.get("business_tagline"), center))
@@ -432,6 +568,7 @@ class ReceiptPrinter:
             return None
 
     def _open_pdf(self, path: str):
+        """Open PDF in default viewer."""
         import subprocess, sys
         try:
             if sys.platform == "win32":
