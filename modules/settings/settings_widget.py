@@ -58,6 +58,7 @@ class SettingsWidget(QWidget):
         tabs.addTab(self._build_tax_tab(),       "💰 Tax")
         tabs.addTab(self._build_shopify_tab(),   "🛔 Shopify")
         tabs.addTab(self._build_hardware_tab(),  "🖨 Hardware")
+        tabs.addTab(self._build_barcode_label_tab(), "🏷 Barcode Labels")
         # Users tab – admin/manager only
         if self.current_user.get("role") in ("admin", "manager"):
             tabs.addTab(self._build_users_tab(), "👥 Users")
@@ -466,6 +467,59 @@ class SettingsWidget(QWidget):
         scroll.setWidget(w)
         return scroll
 
+    # ── Barcode Labels ────────────────────────────────────────────────────
+    def _build_barcode_label_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        w = QWidget()
+        form = QFormLayout(w)
+        form.setSpacing(12)
+
+        self._bc_store_name = QLineEdit()
+        self._bc_store_name.setPlaceholderText("Store name on label")
+        form.addRow("Store Name", self._bc_store_name)
+
+        self._bc_label_width = QDoubleSpinBox()
+        self._bc_label_width.setRange(10, 300)
+        self._bc_label_width.setDecimals(1)
+        self._bc_label_width.setSuffix(" mm")
+        form.addRow("Label Width", self._bc_label_width)
+
+        self._bc_label_height = QDoubleSpinBox()
+        self._bc_label_height.setRange(10, 300)
+        self._bc_label_height.setDecimals(1)
+        self._bc_label_height.setSuffix(" mm")
+        form.addRow("Label Height", self._bc_label_height)
+
+        self._bc_cols = QSpinBox()
+        self._bc_cols.setRange(1, 10)
+        form.addRow("Columns Per Row", self._bc_cols)
+
+        self._bc_gap_x = QDoubleSpinBox()
+        self._bc_gap_x.setRange(0, 50)
+        self._bc_gap_x.setDecimals(1)
+        self._bc_gap_x.setSuffix(" mm")
+        form.addRow("Horizontal Gap", self._bc_gap_x)
+
+        self._bc_gap_y = QDoubleSpinBox()
+        self._bc_gap_y.setRange(0, 50)
+        self._bc_gap_y.setDecimals(1)
+        self._bc_gap_y.setSuffix(" mm")
+        form.addRow("Vertical Gap", self._bc_gap_y)
+
+        self._bc_show_price = QCheckBox("Show Product Price on Label")
+        form.addRow("", self._bc_show_price)
+
+        self._bc_show_variant = QCheckBox("Show Variant Details on Label")
+        form.addRow("", self._bc_show_variant)
+
+        self._bc_default_copies = QSpinBox()
+        self._bc_default_copies.setRange(1, 100)
+        form.addRow("Default Number of Copies", self._bc_default_copies)
+
+        scroll.setWidget(w)
+        return scroll
+
     # ── About ─────────────────────────────────────────────────────────────
     def _build_about_tab(self) -> QWidget:
         w = QWidget()
@@ -575,6 +629,17 @@ class SettingsWidget(QWidget):
         self._vfd_welcome1.setText(c.get("vfd_welcome_line1", "Welcome!"))
         self._vfd_welcome2.setText(c.get("vfd_welcome_line2", "Please wait..."))
 
+        # Barcode Labels
+        self._bc_store_name.setText(self.db.get_setting("barcode_store_name", c.get("business_name", "CanadaMart")))
+        self._bc_label_width.setValue(float(self.db.get_setting("barcode_label_width_mm", "50.0")))
+        self._bc_label_height.setValue(float(self.db.get_setting("barcode_label_height_mm", "25.0")))
+        self._bc_cols.setValue(int(self.db.get_setting("barcode_columns_per_row", "1")))
+        self._bc_gap_x.setValue(float(self.db.get_setting("barcode_gap_x_mm", "2.0")))
+        self._bc_gap_y.setValue(float(self.db.get_setting("barcode_gap_y_mm", "2.0")))
+        self._bc_show_price.setChecked(self.db.get_setting("barcode_show_price", "1") == "1")
+        self._bc_show_variant.setChecked(self.db.get_setting("barcode_show_variant", "1") == "1")
+        self._bc_default_copies.setValue(int(self.db.get_setting("barcode_default_copies", "1")))
+
         self._load_sync_log()
 
     def _save_all(self):
@@ -647,6 +712,18 @@ class SettingsWidget(QWidget):
             "vfd_welcome_line2": self._vfd_welcome2.text(),
         }
         self.config.update(data)
+        
+        # Save Barcode Label Settings to DB
+        self.db.set_setting("barcode_store_name", self._bc_store_name.text().strip())
+        self.db.set_setting("barcode_label_width_mm", str(self._bc_label_width.value()))
+        self.db.set_setting("barcode_label_height_mm", str(self._bc_label_height.value()))
+        self.db.set_setting("barcode_columns_per_row", str(self._bc_cols.value()))
+        self.db.set_setting("barcode_gap_x_mm", str(self._bc_gap_x.value()))
+        self.db.set_setting("barcode_gap_y_mm", str(self._bc_gap_y.value()))
+        self.db.set_setting("barcode_show_price", "1" if self._bc_show_price.isChecked() else "0")
+        self.db.set_setting("barcode_show_variant", "1" if self._bc_show_variant.isChecked() else "0")
+        self.db.set_setting("barcode_default_copies", str(self._bc_default_copies.value()))
+
         QMessageBox.information(self, "Settings Saved", "All settings have been saved successfully.")
         self.settings_saved.emit()
 

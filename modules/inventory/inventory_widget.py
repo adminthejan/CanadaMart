@@ -866,6 +866,77 @@ class _ShopifySyncDialog(QDialog):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  Barcode Preview dialog
+# ═══════════════════════════════════════════════════════════════════════════
+class BarcodePreviewDialog(QDialog):
+    def __init__(self, pil_image, code_str: str, name: str, price_str: str, config, settings: dict, parent=None):
+        super().__init__(parent)
+        self.pil_image = pil_image
+        self.code_str = code_str
+        self.name = name
+        self.price_str = price_str
+        self.config = config
+        self.settings = settings
+        self.setWindowTitle(f"Barcode Preview - {name}")
+        self.setMinimumWidth(400)
+        self._build()
+
+    def _build(self):
+        from PIL.ImageQt import ImageQt
+        layout = QVBoxLayout(self)
+        
+        lbl = QLabel()
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qim = ImageQt(self.pil_image)
+        pix = QPixmap.fromImage(qim)
+        
+        width_mm = float(self.settings.get("barcode_label_width_mm", 50.0))
+        height_mm = float(self.settings.get("barcode_label_height_mm", 25.0))
+        aspect = width_mm / height_mm if height_mm > 0 else 2.0
+        
+        preview_width = 380
+        preview_height = int(preview_width / aspect)
+        
+        if pix.width() > preview_width or pix.height() > preview_height:
+            pix = pix.scaled(preview_width, preview_height, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            
+        lbl.setPixmap(pix)
+        
+        layout.addWidget(lbl)
+        
+        info = QLabel(f"<b>Code:</b> {self.code_str}<br><b>Name:</b> {self.name}<br><b>Price:</b> {self.price_str}")
+        info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(info)
+        
+        form = QFormLayout()
+        self.copies = QSpinBox()
+        self.copies.setRange(1, 1000)
+        self.copies.setValue(int(self.settings.get("barcode_default_copies", 1)))
+        form.addRow("Copies to print:", self.copies)
+        layout.addLayout(form)
+        
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("🖨️ Print")
+        btns.accepted.connect(self._print)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        
+    def _print(self):
+        from services.receipt_printer import ReceiptPrinter
+        printer = ReceiptPrinter(self.config)
+        success = printer.print_barcode_label(self.pil_image, self.name, self.price_str, self.copies.value(), self.settings)
+        if success:
+            QMessageBox.information(self, "Success", "Barcode sent to printer successfully.")
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Print Error", "Failed to print barcode. Check printer settings.")
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  Main Inventory Widget
 # ═══════════════════════════════════════════════════════════════════════════
 class InventoryWidget(QWidget):
@@ -902,6 +973,7 @@ class InventoryWidget(QWidget):
             ("📜 Log", self._view_log, ""),
             ("📤 Export CSV", self._export_csv, ""),
             ("📥 Import CSV", self._import_csv, ""),
+            ("🏷 Print Barcode", self._print_barcode, ""),
         ]:
             btn = QPushButton(label)
             if obj_name:
@@ -1155,6 +1227,50 @@ class InventoryWidget(QWidget):
     def _view_log(self):
         product = self._get_selected_product()
         dlg = InventoryLogDialog(self.db, product, parent=self)
+        dlg.exec()
+
+    def _print_barcode(self):
+        product = self._get_selected_product()
+        if not product:
+            QMessageBox.information(self, "Select Product", "Please select a product.")
+            return
+
+        from services.barcode_utils import encode_product_id, generate_barcode_image
+
+        if product.get("has_variants"):
+            variants = self.db.get_variants(product["id"])
+            if variants:
+                from modules.pos.pos_widget import VariantPickerDialog
+                dlg = VariantPickerDialog(product, variants, self.config.format_currency, self)
+                dlg.variant_selected.connect(
+                    lambda v: self._show_barcode_preview(product, v)
+                )
+                dlg.exec()
+            else:
+                QMessageBox.warning(self, "No Variants", "This product has variants but none exist.")
+        else:
+            self._show_barcode_preview(product, None)
+
+    def _show_barcode_preview(self, product, variant):
+        from services.barcode_utils import encode_product_id, encode_variant_id, generate_barcode_image
+        
+        settings = self.db.get_all_settings()
+        
+        if variant:
+            code_str = encode_variant_id(variant["id"])
+            name = f"{product['name']} - {variant['name']}" if str(settings.get("barcode_show_variant", "1")) == "1" else product['name']
+            price = variant.get('price') or product.get('price', 0)
+        else:
+            code_str = encode_product_id(product["id"])
+            name = product['name']
+            price = product.get('price', 0)
+            
+        sym = self.config.get("currency_symbol", "$")
+        price_str = f"{sym}{price:.2f}"
+            
+        img = generate_barcode_image(code_str, name, settings, price_str)
+        
+        dlg = BarcodePreviewDialog(img, code_str, name, price_str, self.config, settings, self)
         dlg.exec()
 
     def _trigger_shopify_sync(self):

@@ -78,6 +78,95 @@ class ReceiptPrinter:
         """Save receipt as PDF and return file path."""
         return self._generate_pdf(sale, items, customer, directory)
 
+    def print_barcode_label(self, barcode_image, product_name: str, price_str: str, copies: int = 1, settings: dict = None) -> bool:
+        """
+        Prints a barcode label.
+        - ESC/POS: Uses the image printing functionality.
+        - PDF: Falls back to PDF generation.
+        """
+        settings = settings or {}
+        ptype = self.config.get("printer_type", "none")
+        if ptype == "none":
+            return True
+
+        if ptype in ("escpos_usb", "escpos_serial", "escpos_network"):
+            return self._print_barcode_escpos(barcode_image, settings, copies)
+
+        if ptype == "pdf":
+            path = self._generate_barcode_pdf(barcode_image, settings, copies)
+            if path:
+                self._open_pdf(path)
+                return True
+        return False
+
+    def _print_barcode_escpos(self, barcode_image, settings: dict, copies: int) -> bool:
+        p = self._get_escpos_printer()
+        if not p:
+            return False
+        try:
+            p.set(align="center")
+            
+            from PIL import Image
+            cols = int(settings.get("barcode_columns_per_row", 1))
+            # Assume ~8 dots/mm for thermal printers
+            gap_x_px = int(float(settings.get("barcode_gap_x_mm", 2.0)) * 8)
+            
+            single_w = barcode_image.width
+            single_h = barcode_image.height
+            row_w = (single_w * cols) + (max(0, gap_x_px) * (cols - 1))
+            row_image = Image.new("RGB", (row_w, single_h), "white")
+            for i in range(cols):
+                row_image.paste(barcode_image, (i * (single_w + max(0, gap_x_px)), 0))
+                
+            rows = copies // cols
+            leftover = copies % cols
+            
+            for _ in range(rows):
+                p.image(row_image)
+            
+            if leftover > 0:
+                last_row = Image.new("RGB", (row_w, single_h), "white")
+                for i in range(leftover):
+                    last_row.paste(barcode_image, (i * (single_w + max(0, gap_x_px)), 0))
+                p.image(last_row)
+            
+            p.cut()
+            return True
+        except Exception as e:
+            print(f"[Printer] ESC/POS barcode error: {e}")
+            return False
+        finally:
+            try:
+                p.close()
+            except Exception:
+                pass
+
+    def _generate_barcode_pdf(self, barcode_image, settings: dict, copies: int) -> Optional[str]:
+        try:
+            from reportlab.lib.units import mm
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.utils import ImageReader
+            import tempfile, os
+            
+            fd, path = tempfile.mkstemp(suffix=".pdf")
+            os.close(fd)
+            
+            width_mm = float(settings.get("barcode_label_width_mm", 50.0))
+            height_mm = float(settings.get("barcode_label_height_mm", 25.0))
+            
+            c = canvas.Canvas(path, pagesize=(width_mm * mm, height_mm * mm))
+            img_reader = ImageReader(barcode_image)
+            
+            for _ in range(copies):
+                c.drawImage(img_reader, 0, 0, width=width_mm * mm, height=height_mm * mm, preserveAspectRatio=True, anchor='c')
+                c.showPage()
+                
+            c.save()
+            return path
+        except Exception as e:
+            print(f"[Printer] PDF barcode error: {e}")
+            return None
+
     # ------------------------------------------------------------------ #
     #  ESC/POS rendering                                                   #
     # ------------------------------------------------------------------ #

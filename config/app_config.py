@@ -78,6 +78,9 @@ class AppConfig:
         "discount_requires_pin": False,
         "discount_pin": "1234",
         "max_discount_percent": 100.0,
+        # Barcode Obfuscation
+        "barcode_salt": "CanadaMart-POS-2024",
+        "barcode_min_length": 6,
     }
 
     def __init__(self):

@@ -927,7 +927,25 @@ class POSWidget(QWidget):
 
     def _on_barcode_scan(self):
         text = self._search.text().strip()
-        product = self.db.get_product_by_barcode(text)
+        
+        from services.barcode_utils import decode_barcode
+        table, db_id = decode_barcode(text)
+        
+        product = None
+        if table == "products":
+            product = self.db.get_product(db_id)
+        elif table == "product_variants":
+            variant = self.db.get_variant(db_id)
+            if variant:
+                product = self.db.get_product(variant["product_id"])
+                if product:
+                    self._add_variant_to_cart(product, variant)
+                    self._search.clear()
+                    return
+        
+        if not product:
+            product = self.db.get_product_by_barcode(text)
+            
         if product:
             self._add_to_cart(product)
             self._search.clear()

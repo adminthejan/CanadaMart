@@ -183,6 +183,11 @@ class DatabaseManager:
                     last_login    TEXT,
                     created_at    TEXT DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
+                );
             """)
             conn.commit()
             # Migration: empty-string SKUs/barcodes must be NULL so that
@@ -887,3 +892,21 @@ class DatabaseManager:
             (self._hash_password(new_password), user_id),
         )
         self._commit()
+
+    # ================================================================== #
+    #  SETTINGS                                                            #
+    # ================================================================== #
+    def get_setting(self, key: str, default: str = None) -> Optional[str]:
+        row = self._execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str):
+        self._execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self._commit()
+
+    def get_all_settings(self) -> Dict[str, str]:
+        rows = self._execute("SELECT key, value FROM settings").fetchall()
+        return {r["key"]: r["value"] for r in rows}
