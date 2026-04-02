@@ -805,6 +805,16 @@ class SettingsWidget(QWidget):
     # ------------------------------------------------------------------ #
     #  Tests                                                               #
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _ssl_context():
+        """Return an SSL context that trusts certifi's CA bundle."""
+        import ssl
+        try:
+            import certifi
+            return ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            return ssl.create_default_context()
+
     def _test_shopify(self):
         import urllib.request, urllib.parse, json
         url = self._shopify_url.text().strip()
@@ -839,7 +849,7 @@ class SettingsWidget(QWidget):
                     oauth_url, data=data,
                     headers={"Content-Type": "application/x-www-form-urlencoded"}
                 )
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=15, context=self._ssl_context()) as resp:
                     body = json.loads(resp.read())
                 token = body.get("access_token", "")
                 if not token:

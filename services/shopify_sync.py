@@ -37,6 +37,16 @@ class ShopifySyncWorker(QObject):
     # ------------------------------------------------------------------ #
     #  Token helpers (OAuth client credentials)                            #
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _ssl_context():
+        """Return an SSL context that trusts certifi's CA bundle."""
+        import ssl
+        try:
+            import certifi
+            return ssl.create_default_context(cafile=certifi.where())
+        except ImportError:
+            return ssl.create_default_context()
+
     def _fetch_token_via_oauth(self) -> Optional[str]:
         """POST to /admin/oauth/access_token with client_credentials grant.
         Returns the access token string, or None on failure."""
@@ -58,7 +68,7 @@ class ShopifySyncWorker(QObject):
             url, data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"}
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=self._ssl_context()) as resp:
             body = json.loads(resp.read())
         token = body.get("access_token", "")
         expires_in = int(body.get("expires_in", 86399))
@@ -750,7 +760,7 @@ class ShopifySyncWorker(QObject):
                     image_url,
                     headers={"User-Agent": "CanadaMartPOS/1.0"},
                 )
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                with urllib.request.urlopen(req, timeout=15, context=self._ssl_context()) as resp:
                     data = resp.read()
                 with open(local_path, "wb") as f:
                     f.write(data)
