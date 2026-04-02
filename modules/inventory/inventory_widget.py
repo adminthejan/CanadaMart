@@ -1335,7 +1335,7 @@ class InventoryWidget(QWidget):
 
             if adj_type == "add":
                 self.db.adjust_stock(product["id"], qty, "adjustment", notes=notes)
-            elif adj_type == "subtract":admi
+            elif adj_type == "subtract":
                 self.db.adjust_stock(product["id"], -qty, "adjustment", notes=notes)
             elif adj_type == "set":
                 current = int(product.get("quantity", 0))
