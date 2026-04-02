@@ -1,4 +1,5 @@
 """Two-way Shopify ↔ Local inventory sync service."""
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -253,9 +254,32 @@ class ShopifySyncWorker(QObject):
                 variants = self.db.get_variants(product["id"])
                 sp = None
                 if product.get("shopify_id"):
-                    sp = self._api_call(
-                        self._shopify.Product.find, product["shopify_id"]
-                    )
+                    try:
+                        sp = self._api_call(
+                            self._shopify.Product.find, product["shopify_id"]
+                        )
+                    except _SyncStopped:
+                        raise
+                    except Exception as find_err:
+                        err_s = str(find_err)
+                        if "401" in err_s or "Unauthorized" in err_s:
+                            raise
+                        if "404" in err_s or "Not Found" in err_s:
+                            # Product was deleted on Shopify – clear stale IDs
+                            # and fall through to re-create it below.
+                            print(f"[Shopify] Product '{product['name']}' not found "
+                                  f"on Shopify (id={product['shopify_id']}); "
+                                  f"will re-create.")
+                            self.db.update_product(product["id"], {
+                                "shopify_id": None,
+                                "shopify_variant_id": None,
+                                "shopify_inventory_item_id": None,
+                                "shopify_synced": 0,
+                            })
+                            product["shopify_id"] = None
+                            sp = None
+                        else:
+                            raise
                     if sp:
                         sp.title = product["name"]
                         sp.body_html = product.get("description", "")
@@ -279,7 +303,7 @@ class ShopifySyncWorker(QObject):
                                 product.get("shopify_inventory_item_id", ""),
                                 product["quantity"],
                             )
-                else:
+                if not sp:
                     sp = self._create_shopify_product(product, variants)
                     if sp:
                         self._save_shopify_ids_back(product["id"], sp, variants)
@@ -615,6 +639,19 @@ class ShopifySyncWorker(QObject):
                             print(f"[Shopify] Skipped '{sp.title}': unresolvable UNIQUE conflict")
                             continue
 
+                # ── Download product image if not already stored ────────
+                if parent_id:
+                    existing = self.db.get_product(parent_id)
+                    if not (existing and existing.get("image_path") and
+                            os.path.exists(existing.get("image_path", ""))):
+                        images = getattr(sp, "images", []) or []
+                        if images:
+                            img_url = getattr(images[0], "src", "") or ""
+                            if img_url:
+                                local_img = self._download_product_image(str(sp.id), img_url)
+                                if local_img:
+                                    self.db.update_product(parent_id, {"image_path": local_img})
+
                 # ── Sync each variant ───────────────────────────────────
                 for sv in sp.variants:
                     sv_id_str = str(sv.id)
@@ -685,6 +722,52 @@ class ShopifySyncWorker(QObject):
                     raise
                 print(f"[Shopify] Pull error for '{getattr(sp, 'title', '?')}': {e}")
         return count
+
+    # ------------------------------------------------------------------ #
+    #  Image download                                                      #
+    # ------------------------------------------------------------------ #
+    def _download_product_image(self, shopify_product_id: str, image_url: str) -> Optional[str]:
+        """Download first Shopify product image to local storage; return path or None.
+        Retries up to 3 times on transient HTTP errors (5xx, timeout)."""
+        import urllib.request
+        import urllib.error
+
+        img_dir = os.path.join(os.path.expanduser("~"), ".canadamart", "product_images")
+        os.makedirs(img_dir, exist_ok=True)
+
+        clean_url = image_url.split("?")[0]
+        ext = os.path.splitext(clean_url)[-1].lower() or ".jpg"
+        if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+            ext = ".jpg"
+        local_path = os.path.join(img_dir, f"{shopify_product_id}{ext}")
+
+        if os.path.exists(local_path):
+            return local_path  # already cached
+
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    image_url,
+                    headers={"User-Agent": "CanadaMartPOS/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = resp.read()
+                with open(local_path, "wb") as f:
+                    f.write(data)
+                return local_path
+            except urllib.error.HTTPError as e:
+                if e.code in (502, 503, 504) and attempt < 2:
+                    time.sleep(2 ** attempt)  # 1s, 2s back-off
+                    continue
+                print(f"[Shopify] Image download error for {shopify_product_id}: {e}")
+                return None
+            except Exception as e:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                    continue
+                print(f"[Shopify] Image download error for {shopify_product_id}: {e}")
+                return None
+        return None
 
     # ------------------------------------------------------------------ #
     #  Collections ↔ Categories                                           #

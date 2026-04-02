@@ -1,6 +1,7 @@
 """Inventory management module."""
 import csv
 import io
+import os
 from typing import Optional, List
 
 from PyQt6.QtWidgets import (
@@ -11,8 +12,29 @@ from PyQt6.QtWidgets import (
     QTextEdit, QCheckBox, QSizePolicy, QFrame, QInputDialog,
     QColorDialog, QListWidget, QListWidgetItem,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject
-from PyQt6.QtGui import QColor, QBrush, QIcon, QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QThread, QObject, QSize
+from PyQt6.QtGui import QColor, QBrush, QIcon, QPixmap, QImage
+
+# Module-level thumbnail cache: (path, size) → QPixmap (decoded once, reused forever)
+_THUMB_CACHE: dict = {}
+
+def _get_thumb(img_path: str, size: int = 40) -> "QPixmap | None":
+    """Return a cached scaled QPixmap for img_path, or None if unavailable."""
+    key = (img_path, size)
+    if key in _THUMB_CACHE:
+        return _THUMB_CACHE[key]
+    if not img_path or not os.path.exists(img_path):
+        return None
+    img = QImage(img_path)
+    if img.isNull():
+        return None
+    pix = QPixmap.fromImage(img).scaled(
+        size, size,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    _THUMB_CACHE[key] = pix
+    return pix
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -21,9 +43,10 @@ from PyQt6.QtGui import QColor, QBrush, QIcon, QPixmap
 class VariantDialog(QDialog):
     """Add or edit a single product variant."""
 
-    def __init__(self, variant: Optional[dict] = None, parent=None):
+    def __init__(self, variant: Optional[dict] = None, config=None, parent=None):
         super().__init__(parent)
         self.variant = variant
+        self.config = config
         self.setWindowTitle("Edit Variant" if variant else "Add Variant")
         self.setMinimumWidth(420)
         self._build()
@@ -48,16 +71,17 @@ class VariantDialog(QDialog):
         self._barcode.setPlaceholderText("Optional")
         form.addRow("Barcode", self._barcode)
 
+        sym = self.config.get("currency_symbol", "$") if self.config else "$"
         self._price = QDoubleSpinBox()
         self._price.setRange(0, 999999)
         self._price.setDecimals(2)
-        self._price.setPrefix("$ ")
+        self._price.setPrefix(f"{sym} ")
         form.addRow("Price *", self._price)
 
         self._cost = QDoubleSpinBox()
         self._cost.setRange(0, 999999)
         self._cost.setDecimals(2)
-        self._cost.setPrefix("$ ")
+        self._cost.setPrefix(f"{sym} ")
         form.addRow("Cost", self._cost)
 
         self._qty = QSpinBox()
@@ -135,10 +159,11 @@ class VariantDialog(QDialog):
 class _VariantsTab(QWidget):
     """Embedded variants manager for use inside the ProductDialog tabs."""
 
-    def __init__(self, db, product_id: Optional[int] = None, parent=None):
+    def __init__(self, db, product_id: Optional[int] = None, config=None, parent=None):
         super().__init__(parent)
         self.db = db
         self.product_id = product_id
+        self.config = config
         # pending adds/edits before product is saved
         self._pending: List[dict] = []
         self._build()
@@ -220,7 +245,7 @@ class _VariantsTab(QWidget):
         return -1
 
     def _add(self):
-        dlg = VariantDialog(parent=self)
+        dlg = VariantDialog(config=self.config, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._pending.append(dlg.data)
             self._populate()
@@ -231,7 +256,7 @@ class _VariantsTab(QWidget):
             QMessageBox.information(self, "Select", "Please select a variant to edit.")
             return
         all_v = self._all_variants()
-        dlg = VariantDialog(variant=all_v[idx], parent=self)
+        dlg = VariantDialog(variant=all_v[idx], config=self.config, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             if idx < len(self._variants):
                 # existing DB variant – update immediately if product_id exists
@@ -284,10 +309,11 @@ class _VariantsTab(QWidget):
 class ProductDialog(QDialog):
     """Add or edit a product."""
 
-    def __init__(self, db, product: Optional[dict] = None, parent=None):
+    def __init__(self, db, product: Optional[dict] = None, config=None, parent=None):
         super().__init__(parent)
         self.db = db
         self.product = product
+        self.config = config
         self.setWindowTitle("Edit Product" if product else "Add Product")
         self.setMinimumWidth(540)
         self._build()
@@ -335,16 +361,17 @@ class ProductDialog(QDialog):
         pform = QFormLayout(pricing)
         pform.setSpacing(10)
 
+        sym = self.config.get("currency_symbol", "$") if self.config else "$"
         self._price = QDoubleSpinBox()
         self._price.setRange(0, 999999)
         self._price.setDecimals(2)
-        self._price.setPrefix("$ ")
+        self._price.setPrefix(f"{sym} ")
         pform.addRow("Selling Price *", self._price)
 
         self._cost = QDoubleSpinBox()
         self._cost.setRange(0, 999999)
         self._cost.setDecimals(2)
-        self._cost.setPrefix("$ ")
+        self._cost.setPrefix(f"{sym} ")
         pform.addRow("Cost Price", self._cost)
 
         self._quantity = QSpinBox()
@@ -374,7 +401,7 @@ class ProductDialog(QDialog):
         tabs.addTab(pricing, "Pricing & Stock")
 
         # ── Variants tab ────────────────────────────────────────────────
-        self._variants_tab = _VariantsTab(self.db, None, parent=self)
+        self._variants_tab = _VariantsTab(self.db, None, config=self.config, parent=self)
         tabs.addTab(self._variants_tab, "Variants")
 
         # Buttons
@@ -731,7 +758,10 @@ class CategoryManagerDialog(QDialog):
         dlg = _CategoryDialog(category=cat, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
-                self.db.update_category(cat["id"], dlg.data["name"], dlg.data["color"])
+                self.db.update_category(
+                    cat["id"], dlg.data["name"], dlg.data["color"],
+                    cat.get("shopify_collection_id")  # preserve existing Shopify link
+                )
                 self._reload()
             except Exception as e:
                 if "UNIQUE" in str(e):
@@ -863,6 +893,81 @@ class _ShopifySyncDialog(QDialog):
         except Exception:
             pass
         super().closeEvent(event)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Barcode Variant Picker dialog  (separate from POS Add-to-Cart picker)
+# ═══════════════════════════════════════════════════════════════════════════
+class BarcodeVariantPickerDialog(QDialog):
+    """Variant selector used exclusively for the Print Barcode flow."""
+
+    variant_selected = pyqtSignal(dict)
+
+    def __init__(self, product: dict, variants: list, currency_fn, parent=None):
+        super().__init__(parent)
+        self.product = product
+        self.variants = variants
+        self.currency_fn = currency_fn
+        self.setWindowTitle(f"Print Barcode – {product['name']}")
+        self.setMinimumSize(420, 380)
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        lbl = QLabel(f"<b>{self.product['name']}</b> – select a variant to print:")
+        lbl.setStyleSheet("font-size:14px; color:#f1f5f9;")
+        layout.addWidget(lbl)
+
+        self._table = QTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(["Variant", "SKU", "Price", "Stock"])
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in [1, 2, 3]:
+            hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self._table.verticalHeader().hide()
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.doubleClicked.connect(self._select)
+        layout.addWidget(self._table)
+
+        self._table.setRowCount(len(self.variants))
+        for row, v in enumerate(self.variants):
+            qty = int(v.get("quantity", 0))
+            cells = [
+                v.get("name", ""),
+                v.get("sku", "") or "",
+                self.currency_fn(v.get("price", 0)),
+                "OUT" if qty <= 0 else str(qty),
+            ]
+            for col, val in enumerate(cells):
+                item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                if col == 3 and qty <= 0:
+                    item.setForeground(QBrush(QColor("#f87171")))
+                elif col == 3:
+                    item.setForeground(QBrush(QColor("#4ade80")))
+                self._table.setItem(row, col, item)
+            self._table.setRowHeight(row, 54)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        btns.rejected.connect(self.reject)
+        print_btn = btns.addButton("🖨️ Print", QDialogButtonBox.ButtonRole.AcceptRole)
+        print_btn.setMinimumHeight(48)
+        print_btn.setObjectName("SuccessBtn")
+        print_btn.clicked.connect(self._select)
+        layout.addWidget(btns)
+
+    def _select(self):
+        row = self._table.currentRow()
+        if 0 <= row < len(self.variants):
+            v = self.variants[row]
+            self.variant_selected.emit(v)
+            self.accept()
+        else:
+            QMessageBox.information(self, "Select Variant", "Please select a variant to print.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1023,14 +1128,14 @@ class InventoryWidget(QWidget):
         layout.addLayout(filter_row)
 
         # ── Products table ──────────────────────────────────────────────
-        self._table = QTableWidget(0, 11)
+        self._table = QTableWidget(0, 12)
         self._table.setHorizontalHeaderLabels([
-            "SKU", "Name", "Category", "Price", "Cost", "Stock",
+            "Img", "SKU", "Name", "Category", "Price", "Cost", "Stock",
             "Min Stock", "Unit", "Variants", "Shopify", "Actions"
         ])
         hh = self._table.horizontalHeader()
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for col in [0, 2, 3, 4, 5, 6, 7, 8, 9]:
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Name
+        for col in [0, 1, 3, 4, 5, 6, 7, 8, 9, 10]:
             hh.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._table.verticalHeader().hide()
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1105,12 +1210,21 @@ class InventoryWidget(QWidget):
         sym = self.config.get("currency_symbol", "$")
         threshold = int(self.config.get("low_stock_threshold", 5))
         self._table.setRowCount(len(products))
+        self._table.setIconSize(QSize(40, 40))
         self._displayed = products
 
         for row, p in enumerate(products):
             qty = int(p.get("total_stock") if p.get("total_stock") is not None else p.get("quantity", 0))
-
             variant_count = int(p.get("variant_count") or 0)
+
+            # ── Image thumbnail (col 0) ──────────────────────────────────
+            img_item = QTableWidgetItem()
+            pix = _get_thumb(p.get("image_path", "") or "", 40)
+            if pix:
+                img_item.setIcon(QIcon(pix))
+            img_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 0, img_item)
+
             cells = [
                 p.get("sku", "") or "",
                 p.get("name", ""),
@@ -1127,8 +1241,9 @@ class InventoryWidget(QWidget):
             for col, val in enumerate(cells):
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+                tcol = col + 1  # offset by image column
 
-                if col == 5:  # Stock column
+                if col == 5:  # Stock column (now col 6)
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     if qty <= 0:
                         item.setForeground(QBrush(QColor("#f87171")))
@@ -1138,12 +1253,12 @@ class InventoryWidget(QWidget):
                     else:
                         item.setForeground(QBrush(QColor("#4ade80")))
 
-                if col == 8:  # Variants column
+                if col == 8:  # Variants column (now col 9)
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     if variant_count > 0:
                         item.setForeground(QBrush(QColor("#60a5fa")))
 
-                if col == 9:  # Shopify column
+                if col == 9:  # Shopify column (now col 10)
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     if p.get("pos_only"):
                         item.setText("🔒 POS")
@@ -1151,7 +1266,7 @@ class InventoryWidget(QWidget):
                     elif p.get("shopify_id"):
                         item.setForeground(QBrush(QColor("#4ade80")))
 
-                self._table.setItem(row, col, item)
+                self._table.setItem(row, tcol, item)
 
         self._table.resizeRowsToContents()
 
@@ -1165,7 +1280,7 @@ class InventoryWidget(QWidget):
         return None
 
     def _add_product(self):
-        dlg = ProductDialog(self.db, parent=self)
+        dlg = ProductDialog(self.db, config=self.config, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             product_id = self.db.add_product(dlg.data)
             dlg._variants_tab.flush_pending(product_id)
@@ -1176,7 +1291,7 @@ class InventoryWidget(QWidget):
         if not product:
             QMessageBox.information(self, "Select Product", "Please select a product to edit.")
             return
-        dlg = ProductDialog(self.db, product, parent=self)
+        dlg = ProductDialog(self.db, product, config=self.config, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             data = dlg.data
             data["shopify_synced"] = 0  # mark for re-sync
@@ -1188,6 +1303,16 @@ class InventoryWidget(QWidget):
         product = self._get_selected_product()
         if not product:
             return
+
+        if product.get("shopify_id"):
+            QMessageBox.warning(
+                self, "Cannot Delete Shopify Product",
+                f"'{product['name']}' is linked to Shopify.\n\n"
+                f"To remove it, delete the product from your Shopify store first.\n"
+                f"It will be removed from POS on the next sync."
+            )
+            return
+
         reply = QMessageBox.question(
             self, "Delete Product",
             f"Delete '{product['name']}'?\nThis will hide it from POS but keep sales history.",
@@ -1210,7 +1335,7 @@ class InventoryWidget(QWidget):
 
             if adj_type == "add":
                 self.db.adjust_stock(product["id"], qty, "adjustment", notes=notes)
-            elif adj_type == "subtract":
+            elif adj_type == "subtract":admi
                 self.db.adjust_stock(product["id"], -qty, "adjustment", notes=notes)
             elif adj_type == "set":
                 current = int(product.get("quantity", 0))
@@ -1221,7 +1346,9 @@ class InventoryWidget(QWidget):
             if self.shopify_service:
                 updated = self.db.get_product(product["id"])
                 if updated and updated.get("shopify_inventory_item_id"):
-                    self.shopify_service.sync_stock_after_sale([])
+                    self.shopify_service.sync_stock_after_sale([
+                        {"product_id": updated["id"]}
+                    ])
             self._load_products()
 
     def _view_log(self):
@@ -1240,8 +1367,7 @@ class InventoryWidget(QWidget):
         if product.get("has_variants"):
             variants = self.db.get_variants(product["id"])
             if variants:
-                from modules.pos.pos_widget import VariantPickerDialog
-                dlg = VariantPickerDialog(product, variants, self.config.format_currency, self)
+                dlg = BarcodeVariantPickerDialog(product, variants, self.config.format_currency, self)
                 dlg.variant_selected.connect(
                     lambda v: self._show_barcode_preview(product, v)
                 )

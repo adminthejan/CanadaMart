@@ -102,170 +102,281 @@ class ReceiptPrinter:
 
     def _generate_receipt_html(self, sale: Dict, items: List[Dict],
                                 customer: Optional[Dict]) -> str:
-        """Generate HTML content for receipt - formatted for thermal printer."""
-        
-        sym = self.config.get("currency_symbol", "$")
-        bname = self.config.get("business_name", "CanadaMart")
-        tagline = self.config.get("business_tagline", "")
-        addr = self.config.get("business_address", "")
-        phone = self.config.get("business_phone", "")
-        header = self.config.get("receipt_header", "")
-        footer = self.config.get("receipt_footer", "Thank you!")
-        
-        # Format datetime
-        dt = datetime.now().strftime("%d-%b-%Y  %H:%M")
-        
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{
-                    font-family: 'Courier New', monospace;
-                    margin: 0;
-                    padding: 4px;
-                    width: 80mm;
-                    line-height: 1.2;
-                    font-size: 11px;
-                }}
-                .center {{ text-align: center; }}
-                .right {{ text-align: right; }}
-                .left {{ text-align: left; }}
-                h1 {{ font-size: 16px; font-weight: bold; margin: 2px 0; }}
-                h2 {{ font-size: 12px; margin: 2px 0; }}
-                .divider {{ border-bottom: 1px solid #000; margin: 4px 0; }}
-                table {{ width: 100%; border-collapse: collapse; }}
-                td {{ padding: 2px 0; }}
-                .header {{ font-weight: bold; border-bottom: 1px solid #000; margin-bottom: 4px; }}
-                .total {{ font-size: 14px; font-weight: bold; margin: 4px 0; }}
-            </style>
-        </head>
-        <body>
-            <!-- HEADER -->
-            <div class="center">
-                <h1>{bname}</h1>
-        """
-        
-        if tagline:
-            html += f"<div>{tagline}</div>"
-        if addr:
-            html += f"<div>{addr}</div>"
-        if phone:
-            html += f"<div>{phone}</div>"
-        if header:
-            html += f"<div>{header}</div>"
-            
-        html += """
-            </div>
-            <div class="divider"></div>
-        """
-        
-        # INVOICE DETAILS
-        html += f"""
-            <div class="left">
-                <strong>Invoice :</strong> {sale.get('invoice_number', '')}<br>
-                <strong>Date    :</strong> {dt}<br>
-        """
-        
-        if customer:
-            html += f"<strong>Customer:</strong> {customer.get('name', '')}<br>"
-            if customer.get("mobile"):
-                html += f"<strong>Mobile  :</strong> {customer.get('mobile')}<br>"
-                
-        if sale.get("notes"):
-            html += f"<strong>Notes   :</strong> {sale['notes']}<br>"
-            
-        html += """
-            </div>
-            <div class="divider"></div>
-        """
-        
-        # ITEMS HEADER
-        html += """
-            <table class="header">
-                <tr>
-                    <td style="width: 55%;">Item</td>
-                    <td style="width: 15%; text-align: right;">Qty</td>
-                    <td style="width: 30%; text-align: right;">Amount</td>
-                </tr>
-            </table>
-            <div class="divider"></div>
-        """
-        
-        # ITEMS
+        """Generate a professional HTML receipt compatible with Qt's HTML renderer."""
+
+        sym       = self.config.get("currency_symbol", "$")
+        bname     = self.config.get("business_name", "CanadaMart")
+        tagline   = self.config.get("business_tagline", "")
+        addr      = self.config.get("business_address", "")
+        phone     = self.config.get("business_phone", "")
+        email     = self.config.get("business_email", "")
+        header    = self.config.get("receipt_header", "")
+        footer    = self.config.get("receipt_footer", "Thank you for your purchase!")
+        tax_name  = self.config.get("tax_name", "Tax")
+        show_logo = self.config.get("receipt_show_logo", True)
+        logo_path = (self.config.get("receipt_logo_path", "").strip()
+                     or self.config.get("logo_path", "").strip())
+        dt        = datetime.now().strftime("%d %b %Y  %H:%M")
+
+        # -- logo as base64 data-URI --------------------------------------
+        logo_html = ""
+        if show_logo and logo_path and os.path.exists(logo_path):
+            try:
+                import base64
+                from PyQt6.QtGui import QImage
+                from PyQt6.QtCore import QBuffer, QIODevice, QByteArray
+                img = QImage(logo_path)
+                if not img.isNull():
+                    buf = QByteArray()
+                    qbuf = QBuffer(buf)
+                    qbuf.open(QIODevice.OpenModeFlag.WriteOnly)
+                    img.save(qbuf, "PNG")
+                    qbuf.close()
+                    b64 = base64.b64encode(bytes(buf)).decode()
+                    logo_html = (
+                        f'<img src="data:image/png;base64,{b64}" '
+                        f'style="max-width:160px; max-height:70px;"/>'
+                    )
+            except Exception:
+                pass
+
+        # -- store info lines ---------------------------------------------
+        store_info_rows = ""
+        for line in [tagline, addr, phone, email, header]:
+            if line:
+                store_info_rows += (
+                    f'<tr><td align="center" style="font-size:11px; color:#000; '
+                    f'padding:1px 0;">{line}</td></tr>'
+                )
+
+        # -- item rows ----------------------------------------------------
+        rows_html = ""
         for item in items:
-            name = item["product_name"][:50]  # Truncate long names
-            qty = item["quantity"]
-            total = item["total"]
-            html += f"""
-            <table>
-                <tr>
-                    <td style="width: 55%;">{name}</td>
-                    <td style="width: 15%; text-align: right;">{int(qty)}</td>
-                    <td style="width: 30%; text-align: right;">{sym}{total:.2f}</td>
-                </tr>
-            """
-            
-            if item.get("discount_percent", 0) > 0:
-                html += f"""
-                <tr>
-                    <td colspan="3" style="font-size: 10px; color: #666;">
-                        &nbsp;&nbsp;Discount: {item['discount_percent']:.0f}%
-                    </td>
-                </tr>
-                """
-            
-            html += "</table>"
-        
-        html += """
-            <div class="divider"></div>
-        """
-        
-        # TOTALS
-        subtotal = sale.get("subtotal", 0)
-        tax = sale.get("tax_amount", 0)
-        disc = sale.get("discount_amount", 0)
-        total = sale.get("total", 0)
-        paid = sale.get("amount_paid", total)
-        change = sale.get("change_amount", 0)
-        method = sale.get("payment_method", "cash").upper()
-        
-        html += "<div class='right'>"
-        
-        if disc > 0:
-            html += f"<div>Subtotal : {sym}{subtotal:.2f}</div>"
-            html += f"<div>Discount : -{sym}{disc:.2f}</div>"
-            
+            name  = item["product_name"]
+            qty   = int(item["quantity"])
+            price = float(item.get("unit_price", 0))
+            itotal = float(item["total"])
+            disc  = float(item.get("discount_percent", 0))
+            disc_badge = ""
+            if disc > 0:
+                disc_badge = (
+                    f' <span style="font-size:10px; color:#000; '
+                    f'font-weight:bold;">[DISC -{disc:.0f}%]</span>'
+                )
+            rows_html += f"""
+            <tr>
+              <td style="padding:7px 6px; border-bottom:1px solid #ccc; vertical-align:top;">
+                <span style="font-size:12px; font-weight:600; color:#000;">{name}</span>{disc_badge}<br>
+                <span style="font-size:11px; color:#000;">{sym}{price:.2f} &times; {qty}</span>
+              </td>
+              <td style="padding:7px 6px; border-bottom:1px solid #ccc;
+                         text-align:right; vertical-align:top;
+                         font-size:12px; font-weight:700; color:#000; white-space:nowrap;">
+                {sym}{itotal:.2f}
+              </td>
+            </tr>"""
+
+        # -- totals -------------------------------------------------------
+        subtotal = float(sale.get("subtotal", 0))
+        tax      = float(sale.get("tax_amount", 0))
+        disc_amt = float(sale.get("discount_amount", 0))
+        total    = float(sale.get("total", 0))
+        paid     = float(sale.get("amount_paid", total))
+        change   = float(sale.get("change_amount", 0))
+        method   = sale.get("payment_method", "cash").upper()
+
+        totals_html = ""
+        if disc_amt > 0:
+            totals_html += f"""
+            <tr>
+              <td style="padding:5px 6px; font-size:12px; color:#000;">Subtotal</td>
+              <td style="padding:5px 6px; font-size:12px; color:#000; text-align:right;">{sym}{subtotal:.2f}</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 6px; font-size:12px; color:#000; font-weight:700;">Discount</td>
+              <td style="padding:5px 6px; font-size:12px; color:#000; font-weight:700; text-align:right;">-{sym}{disc_amt:.2f}</td>
+            </tr>"""
         if tax > 0:
-            tax_name = self.config.get("tax_name", "Tax")
-            html += f"<div>{tax_name}     : {sym}{tax:.2f}</div>"
-        
-        html += f"""
-            <div class="divider"></div>
-            <div class="total">TOTAL: {sym}{total:.2f}</div>
-            <div>Paid ({method}): {sym}{paid:.2f}</div>
-        """
-        
+            totals_html += f"""
+            <tr>
+              <td style="padding:5px 6px; font-size:12px; color:#000;">{tax_name}</td>
+              <td style="padding:5px 6px; font-size:12px; color:#000; text-align:right;">{sym}{tax:.2f}</td>
+            </tr>"""
+
+        totals_html += f"""
+            <tr>
+              <td colspan="2" style="padding:0; height:2px; background:#000;"></td>
+            </tr>
+            <tr>
+              <td style="padding:8px 6px; font-size:16px; font-weight:800; color:#000;">TOTAL</td>
+              <td style="padding:8px 6px; font-size:16px; font-weight:800; color:#000;
+                         text-align:right;">{sym}{total:.2f}</td>
+            </tr>
+            <tr>
+              <td colspan="2" style="padding:0; height:1px; background:#000;"></td>
+            </tr>
+            <tr>
+              <td style="padding:5px 6px; font-size:12px; color:#000;">Paid ({method})</td>
+              <td style="padding:5px 6px; font-size:12px; color:#000; text-align:right;">{sym}{paid:.2f}</td>
+            </tr>"""
         if change > 0:
-            html += f"<div>Change : {sym}{change:.2f}</div>"
-            
-        html += """
-            </div>
-            <div class="divider"></div>
-        """
-        
-        # FOOTER & BARCODE
-        html += f"""
-            <div class="center">
-                <div>{footer}</div>
-                <div style="margin-top: 8px; font-size: 10px;">
-                    {datetime.now().strftime('%d-%b-%Y %H:%M:%S')}
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        return html
+            totals_html += f"""
+            <tr>
+              <td style="padding:5px 6px; font-size:12px; color:#000; font-weight:700;">Change Due</td>
+              <td style="padding:5px 6px; font-size:12px; color:#000; font-weight:700;
+                         text-align:right;">{sym}{change:.2f}</td>
+            </tr>"""
+
+        # -- customer block -----------------------------------------------
+        cust_html = ""
+        if customer:
+            cust_name = customer.get('name', '')
+            cust_mob  = customer.get('mobile', '')
+            cust_line = cust_name
+            if cust_mob:
+                cust_line += f"&nbsp;&nbsp;{cust_mob}"
+            cust_html = f"""
+            <tr>
+              <td colspan="2" style="padding:5px 6px; font-size:11px; color:#000;">
+                <span style="font-size:10px; font-weight:700;">CUSTOMER:</span>&nbsp;
+                <span style="font-weight:600;">{cust_line}</span>
+              </td>
+            </tr>"""
+
+        if sale.get("notes"):
+            cust_html += f"""
+            <tr>
+              <td colspan="2" style="padding:3px 6px; font-size:11px; color:#000;">
+                <span style="font-size:10px; font-weight:700;">NOTE:</span>&nbsp;{sale['notes']}
+              </td>
+            </tr>"""
+
+        return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0; padding:0; background:#fff; font-family:Arial,sans-serif;">
+
+<table width="100%" cellpadding="0" cellspacing="0"
+       style="background:#fff; color:#111; max-width:600px; margin:0 auto;">
+
+  <!-- ── HEADER ──────────────────────────────────────── -->
+  <tr>
+    <td align="center" style="padding:20px 20px 10px;">
+      {f'<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding-bottom:10px;">{logo_html}</td></tr></table>' if logo_html else ''}
+      <p style="margin:0; font-size:22px; font-weight:800; color:#111;">{bname}</p>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        {store_info_rows}
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── DIVIDER ──────────────────────────────────────── -->
+  <tr>
+    <td style="padding:0 20px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="height:2px; background:#111; font-size:0;">&nbsp;</td></tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── INVOICE META ──────────────────────────────────── -->
+  <tr>
+    <td style="padding:10px 20px 6px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="vertical-align:top;">
+            <span style="font-size:10px; color:#000; font-weight:700;">INVOICE</span><br>
+            <span style="font-size:13px; font-weight:700; color:#000;">{sale.get('invoice_number', '')}</span>
+          </td>
+          <td align="right" style="vertical-align:top;">
+            <span style="font-size:10px; color:#000; font-weight:700;">DATE</span><br>
+            <span style="font-size:12px; color:#000;">{dt}</span>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── CUSTOMER / NOTE ─────────────────────────────── -->
+  {f"""<tr><td style="padding:0 14px;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      {cust_html}
+    </table>
+  </td></tr>""" if cust_html else ""}
+
+  <!-- ── DOTTED DIVIDER ──────────────────────────────── -->
+  <tr>
+    <td style="padding:6px 20px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="border-top:1px dashed #bbb; font-size:0;">&nbsp;</td></tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── ITEMS TABLE ──────────────────────────────────── -->
+  <tr>
+    <td style="padding:0 14px;">
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:2px solid #111;">
+            <th align="left"
+                style="padding:6px 6px 8px; font-size:10px; color:#000;
+                       font-weight:700; text-transform:uppercase;">Item</th>
+            <th align="right"
+                style="padding:6px 6px 8px; font-size:10px; color:#000;
+                       font-weight:700; text-transform:uppercase;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows_html}
+        </tbody>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── DOTTED DIVIDER ──────────────────────────────── -->
+  <tr>
+    <td style="padding:4px 20px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="border-top:1px dashed #bbb; font-size:0;">&nbsp;</td></tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── TOTALS ───────────────────────────────────────── -->
+  <tr>
+    <td style="padding:0 14px 8px;">
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse;">
+        {totals_html}
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── SOLID DIVIDER ───────────────────────────────── -->
+  <tr>
+    <td style="padding:0 20px;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr><td style="height:2px; background:#111; font-size:0;">&nbsp;</td></tr>
+      </table>
+    </td>
+  </tr>
+
+  <!-- ── FOOTER ───────────────────────────────────────── -->
+  <tr>
+    <td align="center" style="padding:14px 20px 20px;">
+      <p style="margin:0 0 4px; font-size:13px; color:#000; font-weight:600;">{footer}</p>
+      <p style="margin:0; font-size:10px; color:#000;">
+        Printed {datetime.now().strftime('%d %b %Y  %H:%M')}
+      </p>
+    </td>
+  </tr>
+
+</table>
+</body>
+</html>"""
+
 
     # ================================================================ #
     #  Public API                                                      #
@@ -279,29 +390,21 @@ class ReceiptPrinter:
         
         Returns True on success.
         """
-        ptype = self.config.get("printer_type", "windows_native")
         copies = int(self.config.get("receipt_copies", 1))
 
-        if ptype == "none":
-            return True  # Silent success - printing disabled
-
-        # Try PyQt6 Windows native printing first
-        if ptype in ("windows_native", "default", ""):
-            for _ in range(copies):
-                ok = self.print_to_windows_default(sale, items, customer)
-                if ok:
-                    return True
-            # Fall back to PDF if native fails
-            print("[Printer] Native printing failed, falling back to PDF.")
-            ptype = "pdf"
-
-        # PDF fallback
-        if ptype == "pdf":
-            path = self._generate_pdf(sale, items, customer)
-            if path:
-                self._open_pdf(path)
+        # Try system default printer
+        for _ in range(copies):
+            ok = self.print_to_windows_default(sale, items, customer)
+            if ok:
                 return True
-                
+
+        # Fall back to PDF if no default printer configured or printing fails
+        print("[Printer] Native printing failed, falling back to PDF.")
+        path = self._generate_pdf(sale, items, customer)
+        if path:
+            self._open_pdf(path)
+            return True
+
         return False
 
     def save_pdf(self, sale: Dict, items: List[Dict],
@@ -317,88 +420,64 @@ class ReceiptPrinter:
         Prints a barcode label via native printer or PDF fallback.
         """
         settings = settings or {}
-        ptype = self.config.get("printer_type", "windows_native")
-        
-        if ptype == "none":
-            return True  # Silent success
-
-        # Try native printing first
-        if ptype in ("windows_native", "default", ""):
-            try:
-                ok = self._print_barcode_native(barcode_image, product_name, 
-                                               price_str, settings, copies)
-                if ok:
-                    return True
-            except Exception as e:
-                print(f"[Printer] Native barcode printing failed: {e}")
-            
-            print("[Printer] Native barcode printing failed, falling back to PDF.")
-            ptype = "pdf"
-
-        # PDF fallback
-        if ptype == "pdf":
-            path = self._generate_barcode_pdf(barcode_image, settings, copies)
-            if path:
-                self._open_pdf(path)
+        # Try system default printer
+        try:
+            ok = self._print_barcode_native(barcode_image, product_name,
+                                            price_str, settings, copies)
+            if ok:
                 return True
-                
+        except Exception as e:
+            print(f"[Printer] Native barcode printing failed: {e}")
+
+        # Fall back to PDF
+        print("[Printer] Native barcode printing failed, falling back to PDF.")
+        path = self._generate_barcode_pdf(barcode_image, settings, copies)
+        if path:
+            self._open_pdf(path)
+            return True
+
         return False
 
     def _print_barcode_native(self, barcode_image, product_name: str,
-                             price_str: str, settings: dict, 
+                             price_str: str, settings: dict,
                              copies: int) -> bool:
         """Print barcode label using PyQt6 native printer."""
         try:
-            from PyQt6.QtGui import QImage, QPixmap
-            from PyQt6.QtCore import QByteArray, QBuffer
-            
+            from PyQt6.QtGui import QPixmap
+
             default_printer_info = QPrinterInfo.defaultPrinter()
             if not default_printer_info or not default_printer_info.printerName():
                 return False
 
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(default_printer_info.printerName())
-            
-            # Label size (e.g., 50x25mm for barcode labels)
+
+            # Label size from settings
             label_w = float(settings.get("barcode_label_width_mm", 50.0))
             label_h = float(settings.get("barcode_label_height_mm", 25.0))
-            
-            printer.setPageSize(QPageSize(label_w, label_h, QPageSize.Unit.Millimeter))
+
+            printer.setPageSize(QPageSize(QSizeF(label_w, label_h), QPageSize.Unit.Millimeter))
             printer.setPageMargins(QMarginsF(2, 2, 2, 2))
-            
+            printer.setCopyCount(copies)
+
+            # Convert barcode image to QPixmap
+            if isinstance(barcode_image, str):
+                pixmap = QPixmap(barcode_image)
+            else:
+                pixmap = QPixmap.fromImage(barcode_image)
+
             painter = QPainter()
             if not painter.begin(printer):
                 return False
-            
-            x_offset = 5
-            y_offset = 2
-            
-            for _ in range(copies):
-                # Draw barcode image
-                if isinstance(barcode_image, str):
-                    pixmap = QPixmap(barcode_image)
-                else:
-                    pixmap = QPixmap.fromImage(barcode_image)
-                
-                painter.drawPixmap(x_offset, y_offset, 
-                                 int(label_w - 10), int(label_h - 10), pixmap)
-                
-                # Draw product info
-                painter.drawText(
-                    5, int(label_h - 8), int(label_w - 10), 5,
-                    0, f"{product_name} {price_str}"
-                )
-                
-                # Page break for next copy
-                if _ < copies - 1:
-                    painter.end()
-                    if not painter.begin(printer):
-                        return False
-            
+
+            # Draw the barcode image scaled to fill the printable page rect
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel).toRect()
+            painter.drawPixmap(page_rect, pixmap)
+
             painter.end()
-            print(f"[Printer] Barcode labels printed ({copies} copies)")
+            print(f"[Printer] Barcode label sent to printer ({copies} copies)")
             return True
-            
+
         except Exception as e:
             print(f"[Printer] Native barcode printing error: {e}")
             return False
@@ -435,7 +514,7 @@ class ReceiptPrinter:
     def _generate_pdf(self, sale: Dict, items: List[Dict],
                       customer: Optional[Dict],
                       directory: str = None) -> Optional[str]:
-        """Generate PDF receipt as fallback."""
+        """Generate a modern PDF receipt."""
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.units import mm
@@ -459,114 +538,213 @@ class ReceiptPrinter:
             fd, path = tempfile.mkstemp(suffix=".pdf")
             os.close(fd)
 
-        page_width = width_mm * mm
+        page_width  = width_mm * mm
         page_height = A4[1]
+        lm = rm = 6 * mm
+        content_w = page_width - lm - rm
 
         doc = SimpleDocTemplate(
             path,
             pagesize=(page_width, page_height),
-            leftMargin=5 * mm, rightMargin=5 * mm,
-            topMargin=8 * mm, bottomMargin=8 * mm,
+            leftMargin=lm, rightMargin=rm,
+            topMargin=8 * mm, bottomMargin=10 * mm,
         )
 
-        styles = getSampleStyleSheet()
-        center = ParagraphStyle("center", parent=styles["Normal"],
-                                alignment=TA_CENTER, fontSize=8)
-        right = ParagraphStyle("right", parent=styles["Normal"],
-                               alignment=TA_RIGHT, fontSize=8)
-        left = ParagraphStyle("left", parent=styles["Normal"],
-                              alignment=TA_LEFT, fontSize=8)
-        title_s = ParagraphStyle("title", parent=styles["Normal"],
-                                 alignment=TA_CENTER, fontSize=12, 
-                                 fontName="Helvetica-Bold")
-        total_s = ParagraphStyle("total", parent=styles["Normal"],
-                                 alignment=TA_RIGHT, fontSize=11, 
-                                 fontName="Helvetica-Bold")
+        # ── colour palette (black & white) ──────────────────────────── #
+        BLACK   = colors.HexColor("#111111")
+        DGREY   = colors.HexColor("#444444")
+        MGREY   = colors.HexColor("#888888")
+        LGREY   = colors.HexColor("#eeeeee")
+        WHITE   = colors.white
 
-        sym = self.config.get("currency_symbol", "$")
-        story = []
+        # ── styles ──────────────────────────────────────────────────── #
+        def _style(name, size, bold=False, align=TA_LEFT,
+                   color=BLACK, space_before=0, space_after=0):
+            return ParagraphStyle(
+                name,
+                fontName="Helvetica-Bold" if bold else "Helvetica",
+                fontSize=size,
+                textColor=color,
+                alignment=align,
+                spaceBefore=space_before * mm,
+                spaceAfter=space_after * mm,
+                leading=size * 1.35,
+            )
 
-        # Business info
-        story.append(Paragraph(self.config.get("business_name", ""), title_s))
-        if self.config.get("business_tagline"):
-            story.append(Paragraph(self.config.get("business_tagline"), center))
-        if self.config.get("business_address"):
-            story.append(Paragraph(self.config.get("business_address"), center))
-        if self.config.get("business_phone"):
-            story.append(Paragraph(self.config.get("business_phone"), center))
-        if self.config.get("receipt_header"):
-            story.append(Paragraph(self.config.get("receipt_header"), center))
+        biz_s   = _style("biz",   14, bold=True,  align=TA_CENTER)
+        sub_s   = _style("sub",    8, bold=False, align=TA_CENTER, color=DGREY)
+        lbl_s   = _style("lbl",    7, bold=False, color=MGREY)
+        val_s   = _style("val",    9, bold=True)
+        item_s  = _style("item",   8)
+        item_sm = _style("itemsm", 7, color=MGREY)
+        tot_s   = _style("tot",   12, bold=True,  align=TA_RIGHT)
+        amt_s   = _style("amt",    8, align=TA_RIGHT, color=DGREY)
+        ftr_s   = _style("ftr",    7, align=TA_CENTER, color=MGREY)
 
-        story.append(HRFlowable(width="100%", color=colors.black))
-        story.append(Spacer(1, 3 * mm))
+        sym      = self.config.get("currency_symbol", "$")
+        tax_name = self.config.get("tax_name", "Tax")
+        story    = []
 
-        # Invoice info
-        dt = datetime.now().strftime("%d-%b-%Y %H:%M")
-        story.append(Paragraph(f"<b>Invoice:</b> {sale.get('invoice_number', '')}", left))
-        story.append(Paragraph(f"<b>Date:</b> {dt}", left))
-        if customer:
-            story.append(Paragraph(f"<b>Customer:</b> {customer.get('name', '')}", left))
-            if customer.get("mobile"):
-                story.append(Paragraph(f"<b>Mobile:</b> {customer.get('mobile')}", left))
+        # ── logo ────────────────────────────────────────────────────── #
+        show_logo = self.config.get("receipt_show_logo", True)
+        logo_path = (self.config.get("receipt_logo_path", "").strip()
+                     or self.config.get("logo_path", "").strip())
+        if show_logo and logo_path and os.path.exists(logo_path):
+            try:
+                from reportlab.platypus import Image as RLImage
+                logo_img = RLImage(logo_path, width=36*mm, height=18*mm, kind="proportional")
+                logo_img.hAlign = "CENTER"
+                story.append(logo_img)
+                story.append(Spacer(1, 2*mm))
+            except Exception:
+                pass
 
-        story.append(HRFlowable(width="100%", color=colors.black))
-        story.append(Spacer(1, 3 * mm))
+        # ── business header ─────────────────────────────────────────── #
+        story.append(Paragraph(self.config.get("business_name", ""), biz_s))
+        for field in ["business_tagline", "business_address",
+                      "business_phone", "business_email", "receipt_header"]:
+            val = self.config.get(field, "")
+            if val:
+                story.append(Paragraph(val, sub_s))
+        story.append(Spacer(1, 2*mm))
+        story.append(HRFlowable(width="100%", thickness=1.2, color=BLACK))
+        story.append(Spacer(1, 3*mm))
 
-        # Items table
-        tdata = [["Item", "Qty", "Price", "Total"]]
-        for item in items:
-            disc_str = ""
-            if item.get("discount_percent", 0) > 0:
-                disc_str = f" (-{item['discount_percent']:.0f}%)"
-            tdata.append([
-                item["product_name"] + disc_str,
-                str(item["quantity"]),
-                f"{sym}{item['unit_price']:.2f}",
-                f"{sym}{item['total']:.2f}",
-            ])
-
-        col_widths = [page_width * 0.45, page_width * 0.1,
-                      page_width * 0.2, page_width * 0.2]
-        tbl = Table(tdata, colWidths=col_widths)
-        tbl.setStyle(TableStyle([
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.black),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        # ── invoice meta ────────────────────────────────────────────── #
+        dt = datetime.now().strftime("%d %b %Y  %H:%M")
+        meta = [
+            [Paragraph("INVOICE", lbl_s), Paragraph("DATE", lbl_s)],
+            [Paragraph(sale.get("invoice_number", ""), val_s),
+             Paragraph(dt, _style("dt", 8, align=TA_RIGHT, color=DGREY))],
+        ]
+        meta_tbl = Table(meta, colWidths=[content_w * 0.55, content_w * 0.45])
+        meta_tbl.setStyle(TableStyle([
+            ("ALIGN",        (1, 0), (1, -1), "RIGHT"),
+            ("VALIGN",       (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING",  (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING",   (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING",(0, 0), (-1, -1), 1),
         ]))
-        story.append(tbl)
-        story.append(HRFlowable(width="100%", color=colors.black))
-        story.append(Spacer(1, 2 * mm))
+        story.append(meta_tbl)
 
-        # Totals
-        subtotal = sale.get("subtotal", 0)
-        tax = sale.get("tax_amount", 0)
-        disc = sale.get("discount_amount", 0)
-        total = sale.get("total", 0)
-        paid = sale.get("amount_paid", total)
-        change = sale.get("change_amount", 0)
-        method = sale.get("payment_method", "cash").upper()
+        if customer:
+            story.append(Spacer(1, 1.5*mm))
+            story.append(Paragraph("CUSTOMER", lbl_s))
+            cname = customer.get("name", "")
+            cmob  = customer.get("mobile", "")
+            story.append(Paragraph(
+                f"{cname}" + (f"  ·  {cmob}" if cmob else ""),
+                _style("cn", 8, bold=True)
+            ))
+        if sale.get("notes"):
+            story.append(Paragraph(f"Note: {sale['notes']}",
+                                   _style("notes", 7, color=MGREY)))
 
-        if disc > 0:
-            story.append(Paragraph(f"Subtotal: {sym}{subtotal:.2f}", right))
-            story.append(Paragraph(f"Discount: -{sym}{disc:.2f}", right))
+        story.append(Spacer(1, 3*mm))
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=BLACK, dash=[2, 2]))
+        story.append(Spacer(1, 2*mm))
+
+        # ── items ────────────────────────────────────────────────────── #
+        # header row
+        hdr_row = [
+            Paragraph("ITEM",   _style("h", 7, bold=True, color=MGREY)),
+            Paragraph("AMOUNT", _style("h", 7, bold=True,
+                                       align=TA_RIGHT, color=MGREY)),
+        ]
+        rows = [hdr_row]
+        for item in items:
+            disc = float(item.get("discount_percent", 0))
+            disc_str = f"  −{disc:.0f}%" if disc > 0 else ""
+            name_para = Paragraph(
+                f"{item['product_name']}{disc_str}<br/>"
+                f"<font color='#888888' size='7'>"
+                f"{sym}{float(item.get('unit_price', 0)):.2f} &times; {int(item['quantity'])}"
+                f"</font>",
+                item_s
+            )
+            amt_para = Paragraph(
+                f"{sym}{float(item['total']):.2f}",
+                _style("a", 9, bold=True, align=TA_RIGHT)
+            )
+            rows.append([name_para, amt_para])
+
+        items_tbl = Table(rows, colWidths=[content_w * 0.68, content_w * 0.32])
+        items_tbl.setStyle(TableStyle([
+            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+            ("ALIGN",         (1, 0), (1, -1),  "RIGHT"),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LINEBELOW",     (0, 0), (-1, 0),  0.5, MGREY),
+            ("LINEBELOW",     (0, 1), (-1, -1), 0.3, LGREY),
+        ]))
+        story.append(items_tbl)
+        story.append(Spacer(1, 2*mm))
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                color=BLACK, dash=[2, 2]))
+        story.append(Spacer(1, 2*mm))
+
+        # ── totals ───────────────────────────────────────────────────── #
+        subtotal = float(sale.get("subtotal", 0))
+        tax      = float(sale.get("tax_amount", 0))
+        disc_amt = float(sale.get("discount_amount", 0))
+        total    = float(sale.get("total", 0))
+        paid     = float(sale.get("amount_paid", total))
+        change   = float(sale.get("change_amount", 0))
+        method   = sale.get("payment_method", "cash").upper()
+
+        def _tot_row(label, value, bold=False, top_rule=False):
+            s = _style("tr", 9, bold=bold, align=TA_RIGHT)
+            sl = _style("tl", 9, bold=bold, color=DGREY)
+            row = [Paragraph(label, sl), Paragraph(value, s)]
+            return row
+
+        tot_rows = []
+        if disc_amt > 0:
+            tot_rows.append(_tot_row("Subtotal",      f"{sym}{subtotal:.2f}"))
+            tot_rows.append(_tot_row("Discount",      f"-{sym}{disc_amt:.2f}"))
         if tax > 0:
-            tname = self.config.get("tax_name", "Tax")
-            story.append(Paragraph(f"{tname}: {sym}{tax:.2f}", right))
-
-        story.append(Spacer(1, 2 * mm))
-        story.append(Paragraph(f"TOTAL: {sym}{total:.2f}", total_s))
-        story.append(Paragraph(f"Paid ({method}): {sym}{paid:.2f}", right))
+            tot_rows.append(_tot_row(tax_name,        f"{sym}{tax:.2f}"))
+        tot_rows.append(_tot_row("TOTAL",             f"{sym}{total:.2f}", bold=True))
+        tot_rows.append(_tot_row(f"Paid ({method})", f"{sym}{paid:.2f}"))
         if change > 0:
-            story.append(Paragraph(f"Change: {sym}{change:.2f}", right))
+            tot_rows.append(_tot_row("Change",        f"{sym}{change:.2f}"))
 
-        story.append(HRFlowable(width="100%", color=colors.black))
-        story.append(Spacer(1, 3 * mm))
+        tot_tbl = Table(tot_rows, colWidths=[content_w * 0.55, content_w * 0.45])
+        tot_tbl.setStyle(TableStyle([
+            ("ALIGN",         (1, 0), (1, -1),  "RIGHT"),
+            ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING",   (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",  (0, 0), (-1, -1), 0),
+            ("TOPPADDING",    (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            # thick rule above TOTAL row
+            ("LINEABOVE",
+             (0, tot_rows.index(
+                 next(r for r in tot_rows
+                      if r[0].text and "TOTAL" in r[0].text)
+             )),
+             (-1, tot_rows.index(
+                 next(r for r in tot_rows
+                      if r[0].text and "TOTAL" in r[0].text)
+             )),
+             1.2, BLACK),
+        ]))
+        story.append(tot_tbl)
 
-        footer = self.config.get("receipt_footer", "Thank you!")
-        story.append(Paragraph(footer, center))
+        story.append(Spacer(1, 3*mm))
+        story.append(HRFlowable(width="100%", thickness=1.2, color=BLACK))
+        story.append(Spacer(1, 3*mm))
+
+        # ── footer ───────────────────────────────────────────────────── #
+        footer = self.config.get("receipt_footer", "Thank you for your purchase!")
+        story.append(Paragraph(footer, ftr_s))
+        story.append(Paragraph(
+            datetime.now().strftime("%d %b %Y %H:%M"), ftr_s
+        ))
 
         try:
             doc.build(story)
@@ -574,6 +752,7 @@ class ReceiptPrinter:
         except Exception as e:
             print(f"[Printer] PDF build error: {e}")
             return None
+
 
     def _open_pdf(self, path: str):
         """Open PDF in default viewer."""
@@ -587,3 +766,78 @@ class ReceiptPrinter:
                 subprocess.Popen(["xdg-open", path])
         except Exception as e:
             print(f"[Printer] Open PDF error: {e}")
+
+    def get_receipt_html(self, sale: Dict, items: List[Dict],
+                         customer: Optional[Dict] = None) -> str:
+        """Return the receipt HTML string (used for preview)."""
+        return self._generate_receipt_html(sale, items, customer)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Receipt Preview Dialog
+# ═══════════════════════════════════════════════════════════════════════════
+class ReceiptPreviewDialog:
+    """
+    Shows a receipt preview in a PyQt6 dialog using QTextBrowser.
+    Call ReceiptPreviewDialog.show(parent, config, sale, items, customer)
+    Returns True if user clicked Print, False otherwise.
+    """
+
+    @staticmethod
+    def show(parent, config, sale: Dict, items: List[Dict],
+             customer: Optional[Dict] = None) -> bool:
+        from PyQt6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+            QPushButton, QTextBrowser, QSizePolicy
+        )
+        from PyQt6.QtCore import Qt
+
+        printer_svc = ReceiptPrinter(config)
+        html = printer_svc.get_receipt_html(sale, items, customer)
+
+        dlg = QDialog(parent)
+        dlg.setWindowTitle(f"Receipt Preview – {sale.get('invoice_number', '')}")
+        dlg.setMinimumSize(540, 640)
+        dlg.resize(580, 760)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(10)
+
+        title = QLabel("🧾  Receipt Preview")
+        title.setStyleSheet("font-size:15px; font-weight:bold; color:#f1f5f9;")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        browser = QTextBrowser()
+        browser.setHtml(html)
+        browser.setStyleSheet(
+            "background:#ffffff; color:#000; border:1px solid #334155;"
+            "border-radius:6px; padding:0px;"
+        )
+        browser.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(browser)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        close_btn = QPushButton("✖  Close")
+        close_btn.setMinimumHeight(44)
+        close_btn.setStyleSheet(
+            "background:#374151; color:#f1f5f9; border-radius:6px; font-size:13px;"
+        )
+        close_btn.clicked.connect(dlg.reject)
+        btn_row.addWidget(close_btn)
+
+        print_btn = QPushButton("🖨️  Print")
+        print_btn.setMinimumHeight(44)
+        print_btn.setObjectName("SuccessBtn")
+        print_btn.setStyleSheet(
+            "background:#16a34a; color:#fff; border-radius:6px; font-size:13px; font-weight:bold;"
+        )
+        print_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(print_btn)
+
+        layout.addLayout(btn_row)
+
+        result = dlg.exec()
+        return result == QDialog.DialogCode.Accepted

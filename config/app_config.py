@@ -34,6 +34,7 @@ class AppConfig:
         "receipt_header": "Thank you for visiting CanadaMart!",
         "receipt_footer": "Goods once sold are not returnable.\nHave a great day!",
         "receipt_show_logo": True,
+        "receipt_logo_path": "",
         "receipt_show_barcode": True,
         "receipt_copies": 1,
         "receipt_paper_width": 80,  # mm
@@ -60,7 +61,7 @@ class AppConfig:
         "shopify_access_token": "",
         "shopify_api_version": "2024-01",
         "shopify_location_id": "",
-        "shopify_sync_interval": 300,
+        "shopify_sync_interval": 3600,
         "shopify_sync_products": True,
         "shopify_sync_inventory": True,
         # Invoicing

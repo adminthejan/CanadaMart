@@ -9,6 +9,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# Suppress the harmless Qt/X11 clipboard-manager timeout warning on Linux
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.clipboard=false")
+
 from PyQt6.QtWidgets import QApplication, QSplashScreen, QLabel
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap, QColor, QFont, QPainter
@@ -16,7 +19,6 @@ from PyQt6.QtGui import QPixmap, QColor, QFont, QPainter
 from config.app_config import AppConfig
 from database.db_manager import DatabaseManager
 from services.shopify_sync import ShopifySyncService
-from services.vfd_display import VFDDisplay
 from ui.login_dialog import LoginDialog
 from ui.main_window import MainWindow
 from ui.styles import get_stylesheet
@@ -109,11 +111,6 @@ def main():
     # ── Shopify sync service ──────────────────────────────────────────────
     shopify_service = ShopifySyncService(config, db)
 
-    # ── VFD Display ───────────────────────────────────────────────────────
-    vfd = VFDDisplay(config)
-    if config.get("vfd_enabled", False):
-        vfd.connect()
-
     # ── Login ─────────────────────────────────────────────────────────────
     splash.finish(None)   # hide splash before showing login
 
@@ -159,7 +156,6 @@ def main():
     exit_code = app.exec()
 
     # Cleanup
-    vfd.disconnect()
     shopify_service.stop()
 
     sys.exit(exit_code)

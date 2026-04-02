@@ -169,6 +169,34 @@ class SettingsWidget(QWidget):
         self._receipt_show_logo = QCheckBox("Show logo on receipt")
         form.addRow("", self._receipt_show_logo)
 
+        # Receipt-specific logo
+        receipt_logo_group = QGroupBox("Receipt / Bill Logo")
+        receipt_logo_group.setToolTip(
+            "Optional: set a separate logo just for receipts/bills.\n"
+            "If left blank the sidebar logo is used."
+        )
+        rl_layout = QVBoxLayout(receipt_logo_group)
+        self._receipt_logo_preview = QLabel("No receipt logo set")
+        self._receipt_logo_preview.setFixedSize(200, 72)
+        self._receipt_logo_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._receipt_logo_preview.setStyleSheet(
+            "border:1px dashed #475569; border-radius:6px; color:#94a3b8;"
+        )
+        rl_layout.addWidget(self._receipt_logo_preview)
+        rl_btn_row = QHBoxLayout()
+        browse_rl = QPushButton("Browse…")
+        browse_rl.clicked.connect(self._browse_receipt_logo)
+        clear_rl = QPushButton("Clear")
+        clear_rl.clicked.connect(self._clear_receipt_logo)
+        rl_btn_row.addWidget(browse_rl)
+        rl_btn_row.addWidget(clear_rl)
+        rl_layout.addLayout(rl_btn_row)
+        self._receipt_logo_path = QLineEdit()
+        self._receipt_logo_path.setPlaceholderText("Path to receipt logo (PNG/JPG)")
+        self._receipt_logo_path.setReadOnly(True)
+        rl_layout.addWidget(self._receipt_logo_path)
+        form.addRow(receipt_logo_group)
+
         self._receipt_show_barcode = QCheckBox("Show barcode on receipt")
         form.addRow("", self._receipt_show_barcode)
 
@@ -346,9 +374,17 @@ class SettingsWidget(QWidget):
         self._shopify_location_id.setPlaceholderText("Leave blank to auto-detect")
         form.addRow("Location ID", self._shopify_location_id)
 
-        self._shopify_sync_interval = QSpinBox()
-        self._shopify_sync_interval.setRange(60, 86400)
-        self._shopify_sync_interval.setSuffix(" seconds")
+        self._shopify_sync_interval = QComboBox()
+        for label, secs in [
+            ("15 minutes",  900),
+            ("30 minutes", 1800),
+            ("1 hour",     3600),
+            ("2 hours",    7200),
+            ("6 hours",   21600),
+            ("12 hours",  43200),
+            ("24 hours",  86400),
+        ]:
+            self._shopify_sync_interval.addItem(label, secs)
         form.addRow("Auto-Sync Interval", self._shopify_sync_interval)
 
         self._shopify_sync_products = QCheckBox("Sync product catalogue")
@@ -400,81 +436,15 @@ class SettingsWidget(QWidget):
         printer_group = QGroupBox("Receipt Printer")
         pform = QFormLayout(printer_group)
 
-        self._printer_type = QComboBox()
-        self._printer_type.addItems([
-            "none", "pdf", "escpos_usb", "escpos_serial", "escpos_network"
-        ])
-        self._printer_type.currentTextChanged.connect(self._update_printer_ui)
-        pform.addRow("Printer Type", self._printer_type)
-
-        self._printer_port = QLineEdit()
-        self._printer_port.setPlaceholderText("COM3 or /dev/ttyUSB0")
-        pform.addRow("Serial Port", self._printer_port)
-
-        self._printer_baudrate = QComboBox()
-        self._printer_baudrate.addItems(["9600", "19200", "38400", "57600", "115200"])
-        pform.addRow("Baud Rate", self._printer_baudrate)
-
-        self._printer_network_ip = QLineEdit()
-        self._printer_network_ip.setPlaceholderText("192.168.1.100")
-        pform.addRow("Network IP", self._printer_network_ip)
-
-        self._printer_network_port = QSpinBox()
-        self._printer_network_port.setRange(1, 65535)
-        self._printer_network_port.setValue(9100)
-        pform.addRow("Network Port", self._printer_network_port)
-
-        self._printer_usb_vendor = QLineEdit()
-        self._printer_usb_vendor.setPlaceholderText("0x04b8 (Epson)")
-        pform.addRow("USB Vendor ID", self._printer_usb_vendor)
-
-        self._printer_usb_product = QLineEdit()
-        self._printer_usb_product.setPlaceholderText("0x0202")
-        pform.addRow("USB Product ID", self._printer_usb_product)
+        info_lbl = QLabel("Receipts are sent to the system default printer automatically.\nNo additional configuration required.")
+        info_lbl.setWordWrap(True)
+        pform.addRow(info_lbl)
 
         test_print_btn = QPushButton("🖨 Print Test Receipt")
         test_print_btn.clicked.connect(self._test_print)
         pform.addRow("", test_print_btn)
 
         layout.addWidget(printer_group)
-
-        # VFD Display
-        vfd_group = QGroupBox("VFD Customer Display")
-        vform = QFormLayout(vfd_group)
-
-        self._vfd_enabled = QCheckBox("Enable VFD Display")
-        vform.addRow("", self._vfd_enabled)
-
-        self._vfd_port = QLineEdit()
-        self._vfd_port.setPlaceholderText("COM4 or /dev/ttyUSB1")
-        vform.addRow("Serial Port", self._vfd_port)
-
-        self._vfd_baudrate = QComboBox()
-        self._vfd_baudrate.addItems(["9600", "19200", "38400"])
-        vform.addRow("Baud Rate", self._vfd_baudrate)
-
-        self._vfd_type = QComboBox()
-        self._vfd_type.addItems(["epson", "bixolon", "generic"])
-        vform.addRow("Display Type", self._vfd_type)
-
-        self._vfd_cols = QSpinBox()
-        self._vfd_cols.setRange(16, 40)
-        self._vfd_cols.setValue(20)
-        vform.addRow("Display Columns", self._vfd_cols)
-
-        self._vfd_welcome1 = QLineEdit()
-        self._vfd_welcome1.setPlaceholderText("Welcome!")
-        vform.addRow("Welcome Line 1", self._vfd_welcome1)
-
-        self._vfd_welcome2 = QLineEdit()
-        self._vfd_welcome2.setPlaceholderText("Please wait…")
-        vform.addRow("Welcome Line 2", self._vfd_welcome2)
-
-        test_vfd_btn = QPushButton("📺 Test VFD")
-        test_vfd_btn.clicked.connect(self._test_vfd)
-        vform.addRow("", test_vfd_btn)
-
-        layout.addWidget(vfd_group)
         layout.addStretch()
         scroll.setWidget(w)
         return scroll
@@ -585,6 +555,8 @@ class SettingsWidget(QWidget):
         self._receipt_paper_width.setCurrentText(str(c.get("receipt_paper_width", 80)))
         self._receipt_show_logo.setChecked(bool(c.get("receipt_show_logo", True)))
         self._receipt_show_barcode.setChecked(bool(c.get("receipt_show_barcode", False)))
+        self._receipt_logo_path.setText(c.get("receipt_logo_path", ""))
+        self._refresh_receipt_logo_preview()
         
         # ✓ Auto-print setting – default to True
         self._auto_print_receipt.setChecked(self.db.get_setting("auto_print_receipt", "1") == "1")
@@ -621,29 +593,16 @@ class SettingsWidget(QWidget):
         self._shopify_token.setText(c.get("shopify_access_token", ""))
         self._shopify_api_version.setText(c.get("shopify_api_version", "2026-01"))
         self._shopify_location_id.setText(c.get("shopify_location_id", ""))
-        self._shopify_sync_interval.setValue(int(c.get("shopify_sync_interval", 300)))
+        saved_interval = int(c.get("shopify_sync_interval", 3600))
+        best_idx = 0
+        best_diff = abs(self._shopify_sync_interval.itemData(0) - saved_interval)
+        for i in range(self._shopify_sync_interval.count()):
+            diff = abs(self._shopify_sync_interval.itemData(i) - saved_interval)
+            if diff < best_diff:
+                best_diff, best_idx = diff, i
+        self._shopify_sync_interval.setCurrentIndex(best_idx)
         self._shopify_sync_products.setChecked(bool(c.get("shopify_sync_products", True)))
         self._shopify_sync_inventory.setChecked(bool(c.get("shopify_sync_inventory", True)))
-
-        # Hardware – Printer
-        idx = self._printer_type.findText(c.get("printer_type", "none"))
-        self._printer_type.setCurrentIndex(max(0, idx))
-        self._printer_port.setText(c.get("printer_port", ""))
-        self._printer_baudrate.setCurrentText(str(c.get("printer_baudrate", 9600)))
-        self._printer_network_ip.setText(c.get("printer_network_ip", ""))
-        self._printer_network_port.setValue(int(c.get("printer_network_port", 9100)))
-        self._printer_usb_vendor.setText(c.get("printer_usb_vendor", "0x04b8"))
-        self._printer_usb_product.setText(c.get("printer_usb_product", "0x0202"))
-
-        # Hardware – VFD
-        self._vfd_enabled.setChecked(bool(c.get("vfd_enabled", False)))
-        self._vfd_port.setText(c.get("vfd_port", "COM3"))
-        self._vfd_baudrate.setCurrentText(str(c.get("vfd_baudrate", 9600)))
-        idx = self._vfd_type.findText(c.get("vfd_type", "epson"))
-        self._vfd_type.setCurrentIndex(max(0, idx))
-        self._vfd_cols.setValue(int(c.get("vfd_cols", 20)))
-        self._vfd_welcome1.setText(c.get("vfd_welcome_line1", "Welcome!"))
-        self._vfd_welcome2.setText(c.get("vfd_welcome_line2", "Please wait..."))
 
         # Barcode Labels
         self._bc_store_name.setText(self.db.get_setting("barcode_store_name", c.get("business_name", "CanadaMart")))
@@ -680,6 +639,7 @@ class SettingsWidget(QWidget):
             "receipt_paper_width": int(self._receipt_paper_width.currentText()),
             "receipt_show_logo": self._receipt_show_logo.isChecked(),
             "receipt_show_barcode": self._receipt_show_barcode.isChecked(),
+            "receipt_logo_path": self._receipt_logo_path.text().strip(),
             "invoice_prefix": self._inv_prefix.text().strip() or "INV",
             "invoice_next_number": self._inv_next.value(),
             "invoice_show_sku": self._inv_show_sku.isChecked(),
@@ -707,25 +667,9 @@ class SettingsWidget(QWidget):
             "shopify_access_token": self._shopify_token.text().strip(),
             "shopify_api_version": self._shopify_api_version.text().strip() or "2026-01",
             "shopify_location_id": self._shopify_location_id.text().strip(),
-            "shopify_sync_interval": self._shopify_sync_interval.value(),
+            "shopify_sync_interval": self._shopify_sync_interval.currentData(),
             "shopify_sync_products": self._shopify_sync_products.isChecked(),
             "shopify_sync_inventory": self._shopify_sync_inventory.isChecked(),
-            # Hardware – Printer
-            "printer_type": self._printer_type.currentText(),
-            "printer_port": self._printer_port.text().strip(),
-            "printer_baudrate": int(self._printer_baudrate.currentText()),
-            "printer_network_ip": self._printer_network_ip.text().strip(),
-            "printer_network_port": self._printer_network_port.value(),
-            "printer_usb_vendor": self._printer_usb_vendor.text().strip() or "0x04b8",
-            "printer_usb_product": self._printer_usb_product.text().strip() or "0x0202",
-            # Hardware – VFD
-            "vfd_enabled": self._vfd_enabled.isChecked(),
-            "vfd_port": self._vfd_port.text().strip(),
-            "vfd_baudrate": int(self._vfd_baudrate.currentText()),
-            "vfd_type": self._vfd_type.currentText(),
-            "vfd_cols": self._vfd_cols.value(),
-            "vfd_welcome_line1": self._vfd_welcome1.text(),
-            "vfd_welcome_line2": self._vfd_welcome2.text(),
         }
         self.config.update(data)
         
@@ -749,14 +693,89 @@ class SettingsWidget(QWidget):
     # ------------------------------------------------------------------ #
     #  Logo helpers                                                        #
     # ------------------------------------------------------------------ #
+    def _browse_receipt_logo(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Receipt Logo", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.tiff *.tif *.gif)"
+        )
+        if not path:
+            return
+        dest = self._copy_logo_to_config(path, dest_name="receipt_logo.png")
+        self._receipt_logo_path.setText(dest if dest else path)
+        self._refresh_receipt_logo_preview()
+
+    def _clear_receipt_logo(self):
+        self._receipt_logo_path.clear()
+        self._receipt_logo_preview.clear()
+        self._receipt_logo_preview.setText("No receipt logo set")
+
+    def _refresh_receipt_logo_preview(self):
+        path = self._receipt_logo_path.text().strip()
+        if not path:
+            self._receipt_logo_preview.setText("No receipt logo set")
+            return
+        if not os.path.exists(path):
+            self._receipt_logo_preview.setText("⚠ File not found")
+            return
+        from PyQt6.QtGui import QImage
+        img = QImage(path)
+        if not img.isNull():
+            pix = QPixmap.fromImage(img)
+            self._receipt_logo_preview.setPixmap(pix.scaled(
+                196, 68,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        else:
+            self._receipt_logo_preview.setText("⚠ Cannot load image")
+
     def _browse_logo(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Logo", "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.svg)"
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.tiff *.tif *.svg *.gif)"
         )
-        if path:
-            self._logo_path.setText(path)
-            self._refresh_logo_preview()
+        if not path:
+            return
+        dest = self._copy_logo_to_config(path, dest_name="logo.png")
+        target = dest if dest else path
+        self._logo_path.setText(target)
+        self._refresh_logo_preview()
+
+    def _copy_logo_to_config(self, src_path: str, dest_name: str = "logo.png") -> Optional[str]:
+        """Copy (and convert) src_path to ~/.canadamart/<dest_name>.
+        Returns the destination path, or None on failure."""
+        from pathlib import Path
+        config_dir = Path.home() / ".canadamart"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        dest = str(config_dir / dest_name)
+
+        # Try Qt-native conversion first (QImage supports many formats)
+        from PyQt6.QtGui import QImage
+        img = QImage(src_path)
+        if not img.isNull():
+            if img.save(dest, "PNG"):
+                return dest
+
+        # Fallback: try Pillow if installed
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(src_path) as pil_img:
+                pil_img.convert("RGBA").save(dest, "PNG")
+            return dest
+        except Exception:
+            pass
+
+        # Last resort: plain file copy (same format, might still fail to preview)
+        try:
+            import shutil
+            ext = Path(src_path).suffix.lower()
+            dest_raw = str(config_dir / f"logo{ext}")
+            shutil.copy2(src_path, dest_raw)
+            return dest_raw
+        except Exception:
+            pass
+
+        return None
 
     def _clear_logo(self):
         self._logo_path.clear()
@@ -764,19 +783,24 @@ class SettingsWidget(QWidget):
         self._logo_preview.setText("No Logo")
 
     def _refresh_logo_preview(self):
-        path = self._logo_path.text()
-        if path and os.path.exists(path):
-            pix = QPixmap(path)
-            if not pix.isNull():
-                self._logo_preview.setPixmap(pix.scaled(
-                    196, 76,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                ))
-            else:
-                self._logo_preview.setText("⚠ Cannot load image")
-        else:
+        path = self._logo_path.text().strip()
+        if not path:
             self._logo_preview.setText("No Logo")
+            return
+        if not os.path.exists(path):
+            self._logo_preview.setText("⚠ File not found")
+            return
+        from PyQt6.QtGui import QImage
+        img = QImage(path)
+        if not img.isNull():
+            pix = QPixmap.fromImage(img)
+            self._logo_preview.setPixmap(pix.scaled(
+                196, 76,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        else:
+            self._logo_preview.setText("⚠ Cannot load image")
 
     # ------------------------------------------------------------------ #
     #  Tests                                                               #
@@ -843,7 +867,7 @@ class SettingsWidget(QWidget):
                 "shopify_access_token":   static_token,
                 "shopify_api_version":    version,
                 "shopify_location_id":    self._shopify_location_id.text().strip(),
-                "shopify_sync_interval":  self._shopify_sync_interval.value(),
+                "shopify_sync_interval":  self._shopify_sync_interval.currentData(),
                 "shopify_sync_products":  self._shopify_sync_products.isChecked(),
                 "shopify_sync_inventory": self._shopify_sync_inventory.isChecked(),
             })
@@ -890,21 +914,6 @@ class SettingsWidget(QWidget):
             QMessageBox.information(self, "Test Print", "Test receipt sent to printer.")
         else:
             QMessageBox.warning(self, "Test Print", "Print failed – check printer settings.")
-
-    def _test_vfd(self):
-        from services.vfd_display import VFDDisplay
-        vfd = VFDDisplay(self.config)
-        ok = vfd.connect()
-        if ok:
-            vfd.show_message("VFD TEST", "Connected OK!")
-            vfd.disconnect()
-            QMessageBox.information(self, "VFD Test", "VFD connected and test message sent.")
-        else:
-            QMessageBox.warning(self, "VFD Test",
-                                "Could not connect to VFD. Check port and settings.")
-
-    def _update_printer_ui(self, ptype: str):
-        pass  # Could show/hide fields based on type
 
     def _load_sync_log(self):
         logs = self.db.get_sync_log(30)

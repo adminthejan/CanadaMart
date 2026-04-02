@@ -157,9 +157,14 @@ class ReportsWidget(QWidget):
         load_btn.clicked.connect(self._load_report)
         toolbar.addWidget(load_btn)
 
-        export_btn = QPushButton("📤 Export")
+        export_btn = QPushButton("📤 Export CSV")
         export_btn.clicked.connect(self._export)
         toolbar.addWidget(export_btn)
+
+        pdf_btn = QPushButton("📄 Download PDF")
+        pdf_btn.setObjectName("SecondaryBtn")
+        pdf_btn.clicked.connect(self._export_pdf)
+        toolbar.addWidget(pdf_btn)
 
         layout.addLayout(toolbar)
 
@@ -223,6 +228,10 @@ class ReportsWidget(QWidget):
     # ------------------------------------------------------------------ #
     #  Data loading                                                        #
     # ------------------------------------------------------------------ #
+    def refresh(self):
+        """Called whenever the Reports tab becomes visible – reload current range."""
+        self._load_report()
+
     def _load_today(self):
         today = QDate.currentDate()
         self._date_from.setDate(today)
@@ -317,7 +326,261 @@ class ReportsWidget(QWidget):
             self._pay_table.setItem(row, 2, total_item)
 
     # ------------------------------------------------------------------ #
-    #  Export                                                              #
+    #  PDF Export (all reports)                                            #
+    # ------------------------------------------------------------------ #
+    def _export_pdf(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Report PDF", "sales_report.pdf",
+            "PDF Files (*.pdf)"
+        )
+        if not path:
+            return
+
+        date_from = self._date_from.date().toString("yyyy-MM-dd")
+        date_to   = self._date_to.date().toString("yyyy-MM-dd")
+        sym       = self.config.get("currency_symbol", "$")
+
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.units import mm
+            from reportlab.lib import colors
+            from reportlab.platypus import (
+                SimpleDocTemplate, Paragraph, Spacer, Table,
+                TableStyle, HRFlowable, KeepTogether,
+            )
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+        except ImportError:
+            QMessageBox.warning(self, "Missing Package",
+                                "Install reportlab:\npip install reportlab")
+            return
+
+        import os
+
+        doc = SimpleDocTemplate(
+            path, pagesize=A4,
+            leftMargin=15*mm, rightMargin=15*mm,
+            topMargin=15*mm, bottomMargin=15*mm,
+        )
+
+        styles = getSampleStyleSheet()
+        h1  = ParagraphStyle("h1",  parent=styles["Heading1"],
+                             fontSize=16, textColor=colors.HexColor("#1e3a5f"),
+                             spaceAfter=4)
+        h2  = ParagraphStyle("h2",  parent=styles["Heading2"],
+                             fontSize=12, textColor=colors.HexColor("#1e3a5f"),
+                             spaceBefore=10, spaceAfter=4)
+        ctr = ParagraphStyle("ctr", parent=styles["Normal"],
+                             alignment=TA_CENTER, fontSize=9,
+                             textColor=colors.HexColor("#374151"))
+        sml = ParagraphStyle("sml", parent=styles["Normal"],
+                             fontSize=8, textColor=colors.HexColor("#374151"))
+        biz_name   = self.config.get("business_name", "")
+        biz_addr   = self.config.get("business_address", "")
+        biz_phone  = self.config.get("business_phone", "")
+        logo_path  = self.config.get("logo_path", "")
+        show_logo  = self.config.get("receipt_show_logo", True)
+
+        story = []
+
+        # ── Header: logo + business info ─────────────────────────────── #
+        if show_logo and logo_path and os.path.exists(logo_path):
+            try:
+                from reportlab.platypus import Image as RLImage
+                logo = RLImage(logo_path, width=40*mm, height=20*mm,
+                               kind="proportional")
+                logo.hAlign = "CENTER"
+                story.append(logo)
+                story.append(Spacer(1, 3*mm))
+            except Exception:
+                pass
+
+        story.append(Paragraph(biz_name or "Sales Report", h1))
+        if biz_addr:
+            story.append(Paragraph(biz_addr, ctr))
+        if biz_phone:
+            story.append(Paragraph(biz_phone, ctr))
+        story.append(Paragraph(
+            f"Report Period: <b>{date_from}</b> to <b>{date_to}</b>", ctr))
+        story.append(HRFlowable(width="100%",
+                                color=colors.HexColor("#1e3a5f"), thickness=1.5))
+        story.append(Spacer(1, 5*mm))
+
+        # ── Summary cards ────────────────────────────────────────────── #
+        summary = self.db.get_sales_summary(date_from, date_to)
+        revenue = float(summary.get("total_revenue", 0) or 0)
+        txns    = int(summary.get("total_transactions", 0) or 0)
+        avg     = float(summary.get("avg_transaction", 0) or 0)
+        tax     = float(summary.get("total_tax", 0) or 0)
+        disc    = float(summary.get("total_discounts", 0) or 0)
+
+        story.append(Paragraph("Summary", h2))
+        summary_data = [
+            ["Metric", "Value"],
+            ["Total Revenue",     f"{sym}{revenue:.2f}"],
+            ["Transactions",      str(txns)],
+            ["Average Sale",      f"{sym}{avg:.2f}"],
+            ["Tax Collected",     f"{sym}{tax:.2f}"],
+            ["Discounts Given",   f"{sym}{disc:.2f}"],
+        ]
+        col_w = [100*mm, 60*mm]
+        sum_tbl = Table(summary_data, colWidths=col_w)
+        sum_tbl.setStyle(TableStyle([
+            ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+            ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
+            ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE",    (0, 0), (-1, -1), 9),
+            ("ALIGN",       (1, 0), (1, -1), "RIGHT"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.HexColor("#f8fafc"), colors.HexColor("#e2e8f0")]),
+            ("LINEBELOW",   (0, 0), (-1, -1), 0.3, colors.HexColor("#cbd5e1")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING",(0, 0), (-1, -1), 6),
+            ("TOPPADDING",  (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING",(0, 0),(-1, -1), 4),
+        ]))
+        story.append(sum_tbl)
+        story.append(Spacer(1, 6*mm))
+
+        # ── Sales list ───────────────────────────────────────────────── #
+        sales = self.db.get_sales(date_from, date_to)
+        story.append(Paragraph(f"Sales List ({len(sales)} transactions)", h2))
+
+        if sales:
+            tdata = [["Invoice", "Date", "Customer", "Subtotal",
+                      "Tax", "Discount", "Total", "Method"]]
+            for s in sales:
+                tdata.append([
+                    s.get("invoice_number", ""),
+                    (s.get("created_at", "") or "")[:16],
+                    s.get("customer_name", "Walk-in") or "Walk-in",
+                    f"{sym}{s.get('subtotal', 0):.2f}",
+                    f"{sym}{s.get('tax_amount', 0):.2f}",
+                    f"{sym}{s.get('discount_amount', 0):.2f}",
+                    f"{sym}{s.get('total', 0):.2f}",
+                    (s.get("payment_method", "") or "").upper(),
+                ])
+            pw = A4[0] - 30*mm
+            cws = [pw*0.13, pw*0.14, pw*0.18, pw*0.12,
+                   pw*0.10, pw*0.10, pw*0.12, pw*0.11]
+            stbl = Table(tdata, colWidths=cws, repeatRows=1)
+            stbl.setStyle(TableStyle([
+                ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+                ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
+                ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",    (0, 0), (-1, -1), 7),
+                ("ALIGN",       (3, 0), (-1, -1), "RIGHT"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#f1f5f9")]),
+                ("LINEBELOW",   (0, 0), (-1, -1), 0.2, colors.HexColor("#e2e8f0")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING",(0, 0), (-1, -1), 4),
+                ("TOPPADDING",  (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING",(0, 0),(-1, -1), 3),
+            ]))
+            story.append(stbl)
+        else:
+            story.append(Paragraph("No sales in this period.", sml))
+
+        story.append(Spacer(1, 6*mm))
+
+        # ── Top Products ─────────────────────────────────────────────── #
+        top = self.db.get_top_products(date_from, date_to)
+        story.append(Paragraph(f"Top Products ({len(top)} items)", h2))
+
+        if top:
+            tpdata = [["Product", "SKU", "Units Sold", "Revenue"]]
+            for p in top:
+                tpdata.append([
+                    p.get("product_name", ""),
+                    p.get("sku", "") or "",
+                    str(p.get("units_sold", 0)),
+                    f"{sym}{p.get('revenue', 0):.2f}",
+                ])
+            pw = A4[0] - 30*mm
+            tpcws = [pw*0.50, pw*0.20, pw*0.15, pw*0.15]
+            tptbl = Table(tpdata, colWidths=tpcws, repeatRows=1)
+            tptbl.setStyle(TableStyle([
+                ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+                ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
+                ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",    (0, 0), (-1, -1), 8),
+                ("ALIGN",       (2, 0), (-1, -1), "RIGHT"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#f1f5f9")]),
+                ("LINEBELOW",   (0, 0), (-1, -1), 0.2, colors.HexColor("#e2e8f0")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING",(0, 0), (-1, -1), 5),
+                ("TOPPADDING",  (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING",(0, 0),(-1, -1), 3),
+            ]))
+            story.append(tptbl)
+        else:
+            story.append(Paragraph("No product data in this period.", sml))
+
+        story.append(Spacer(1, 6*mm))
+
+        # ── Payment Breakdown ─────────────────────────────────────────── #
+        payments = self.db.get_payment_breakdown(date_from, date_to)
+        story.append(Paragraph("Payment Methods", h2))
+
+        if payments:
+            ppdata = [["Payment Method", "Transactions", "Total"]]
+            for p in payments:
+                ppdata.append([
+                    (p.get("payment_method", "") or "").upper(),
+                    str(p.get("count", 0)),
+                    f"{sym}{p.get('total', 0):.2f}",
+                ])
+            pw = A4[0] - 30*mm
+            ppcws = [pw*0.50, pw*0.25, pw*0.25]
+            pptbl = Table(ppdata, colWidths=ppcws)
+            pptbl.setStyle(TableStyle([
+                ("BACKGROUND",  (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+                ("TEXTCOLOR",   (0, 0), (-1, 0), colors.white),
+                ("FONTNAME",    (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE",    (0, 0), (-1, -1), 9),
+                ("ALIGN",       (1, 0), (-1, -1), "RIGHT"),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+                 [colors.white, colors.HexColor("#f1f5f9")]),
+                ("LINEBELOW",   (0, 0), (-1, -1), 0.2, colors.HexColor("#e2e8f0")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING",(0, 0), (-1, -1), 5),
+                ("TOPPADDING",  (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING",(0, 0),(-1, -1), 4),
+            ]))
+            story.append(pptbl)
+        else:
+            story.append(Paragraph("No payment data in this period.", sml))
+
+        # ── Footer ───────────────────────────────────────────────────── #
+        story.append(Spacer(1, 8*mm))
+        story.append(HRFlowable(width="100%",
+                                color=colors.HexColor("#cbd5e1"), thickness=0.5))
+        from datetime import datetime as _dt
+        story.append(Paragraph(
+            f"Generated: {_dt.now().strftime('%d-%b-%Y %H:%M')}  |  "
+            f"{biz_name}",
+            ParagraphStyle("foot", parent=styles["Normal"],
+                           fontSize=7, textColor=colors.HexColor("#94a3b8"),
+                           alignment=TA_CENTER)
+        ))
+
+        try:
+            doc.build(story)
+            QMessageBox.information(self, "PDF Saved", f"Report saved to:\n{path}")
+            import subprocess, sys
+            if sys.platform == "win32":
+                import os as _os; _os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            QMessageBox.critical(self, "PDF Error", f"Could not create PDF:\n{e}")
+
+    # ------------------------------------------------------------------ #
+    #  CSV Export                                                          #
     # ------------------------------------------------------------------ #
     def _export(self):
         path, filt = QFileDialog.getSaveFileName(

@@ -1,4 +1,5 @@
 """Full-featured POS (Point of Sale) module – Touch-optimised, real-time stock."""
+import os
 import re
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -12,7 +13,28 @@ from PyQt6.QtWidgets import (
     QButtonGroup, QDialogButtonBox, QSizePolicy, QTextEdit,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QFont, QColor, QPalette, QKeySequence, QShortcut, QBrush
+from PyQt6.QtGui import QFont, QColor, QPalette, QKeySequence, QShortcut, QBrush, QPixmap, QImage
+
+# Module-level thumbnail cache: path → QPixmap (decoded once, reused forever)
+_THUMB_CACHE: dict = {}
+
+def _get_thumb(img_path: str, size: int = 56) -> "QPixmap | None":
+    """Return a cached scaled QPixmap for img_path, or None if unavailable."""
+    key = (img_path, size)
+    if key in _THUMB_CACHE:
+        return _THUMB_CACHE[key]
+    if not img_path or not os.path.exists(img_path):
+        return None
+    img = QImage(img_path)
+    if img.isNull():
+        return None
+    pix = QPixmap.fromImage(img).scaled(
+        size, size,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    _THUMB_CACHE[key] = pix
+    return pix
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,6 +88,16 @@ class ProductCard(QPushButton):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(4)
+
+        # ── Thumbnail ──────────────────────────────────────────────────
+        img_path = self.product.get("image_path", "") or ""
+        pix = _get_thumb(img_path, 56)
+        if pix:
+            thumb_lbl = QLabel()
+            thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            thumb_lbl.setPixmap(pix)
+            thumb_lbl.setFixedHeight(60)
+            layout.addWidget(thumb_lbl)
 
         name = QLabel(self.product["name"])
         name.setObjectName("ProductCardName")
@@ -1146,21 +1178,16 @@ class POSWidget(QWidget):
         auto_print = self.db.get_setting("auto_print_receipt", "1") == "1"
         
         if auto_print:
-            # Auto-print enabled: print immediately without user interaction
-            from services.receipt_printer import ReceiptPrinter
-            ReceiptPrinter(self.config).print_receipt(sale_data, items_data, self.selected_customer)
+            # Auto-print enabled: show preview then print
+            from services.receipt_printer import ReceiptPrinter, ReceiptPreviewDialog
+            should_print = ReceiptPreviewDialog.show(self, self.config, sale_data, items_data, self.selected_customer)
+            if should_print:
+                ReceiptPrinter(self.config).print_receipt(sale_data, items_data, self.selected_customer)
         else:
-            # Auto-print disabled: show optional print dialog
-            reply = QMessageBox(self)
-            reply.setWindowTitle("Receipt Ready")
-            reply.setText("Would you like to print a receipt for this sale?")
-            reply.setIcon(QMessageBox.Icon.Question)
-            reply.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            reply.button(QMessageBox.StandardButton.Yes).setText("🖨️  Print Receipt")
-            reply.button(QMessageBox.StandardButton.No).setText("Skip")
-            
-            if reply.exec() == QMessageBox.StandardButton.Yes:
-                from services.receipt_printer import ReceiptPrinter
+            # Auto-print disabled: show preview with option to print
+            from services.receipt_printer import ReceiptPrinter, ReceiptPreviewDialog
+            should_print = ReceiptPreviewDialog.show(self, self.config, sale_data, items_data, self.selected_customer)
+            if should_print:
                 ReceiptPrinter(self.config).print_receipt(sale_data, items_data, self.selected_customer)
 
         sym = self.config.get("currency_symbol", "$")

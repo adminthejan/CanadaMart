@@ -807,10 +807,12 @@ class DatabaseManager:
 
     def get_unsynced_products(self) -> List[Dict]:
         rows = self._execute(
-            """SELECT * FROM products
-               WHERE (shopify_synced = 0 OR shopify_synced IS NULL)
-                 AND active = 1
-                 AND (pos_only = 0 OR pos_only IS NULL)"""
+            """SELECT p.*, c.name AS category_name
+               FROM products p
+               LEFT JOIN categories c ON p.category_id = c.id
+               WHERE (p.shopify_synced = 0 OR p.shopify_synced IS NULL)
+                 AND p.active = 1
+                 AND (p.pos_only = 0 OR p.pos_only IS NULL)"""
         ).fetchall()
         return [dict(r) for r in rows]
 

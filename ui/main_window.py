@@ -146,6 +146,24 @@ class MainWindow(QMainWindow):
         # Initialise button state
         self._update_sync_pause_btn()
 
+    def _update_sidebar_logo(self):
+        """Load the configured logo into the sidebar label (or clear it)."""
+        logo_path = self.config.get("logo_path", "").strip()
+        if logo_path and os.path.exists(logo_path):
+            from PyQt6.QtGui import QImage
+            img = QImage(logo_path)
+            if not img.isNull():
+                pix = QPixmap.fromImage(img)
+                self._sidebar_logo_label.setPixmap(
+                    pix.scaled(140, 60,
+                               Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
+                )
+                self._sidebar_logo_label.setVisible(True)
+                return
+        self._sidebar_logo_label.clear()
+        self._sidebar_logo_label.setVisible(False)
+
     def _build_sidebar(self) -> QWidget:
         sidebar = QWidget()
         sidebar.setObjectName("Sidebar")
@@ -160,17 +178,12 @@ class MainWindow(QMainWindow):
         logo_layout.setContentsMargins(8, 0, 8, 8)
         logo_layout.setSpacing(2)
 
-        logo_path = self.config.get("logo_path", "")
-        if logo_path and os.path.exists(logo_path):
-            pix = QPixmap(logo_path)
-            if not pix.isNull():
-                logo_label = QLabel()
-                logo_label.setPixmap(pix.scaled(
-                    140, 60, Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                ))
-                logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                logo_layout.addWidget(logo_label)
+        self._sidebar_logo_label = QLabel()
+        self._sidebar_logo_label.setObjectName("SidebarLogo")
+        self._sidebar_logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._sidebar_logo_label.setMaximumHeight(64)
+        logo_layout.addWidget(self._sidebar_logo_label)
+        self._update_sidebar_logo()
 
         app_title = QLabel(self.config.get("app_name", "CanadaMart POS"))
         app_title.setObjectName("AppTitle")
@@ -291,6 +304,9 @@ class MainWindow(QMainWindow):
         target = self._slot_widgets.get(index)
         if target is not None:
             self._stack.setCurrentWidget(target)
+            # Refresh data-heavy modules when switching to them
+            if hasattr(target, "refresh"):
+                target.refresh()
 
     def _load_module(self, index: int) -> QWidget:
         try:
@@ -416,7 +432,8 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self):
         self._setup_window()
         self._apply_theme()
-        # Refresh sidebar title
+        # Refresh sidebar title, subtitle, and logo
+        self._update_sidebar_logo()
         for w in self._sidebar.findChildren(QLabel):
             if w.objectName() == "AppTitle":
                 w.setText(self.config.get("app_name", "CanadaMart POS"))
