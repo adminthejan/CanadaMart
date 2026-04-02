@@ -80,6 +80,7 @@ class ReceiptPrinter:
             
             # 4. Create QTextDocument and render to printer
             doc = QTextDocument()
+            doc.setDocumentMargin(0)  # remove default internal side margins
             doc.setHtml(html_content)
             
             # QTextDocument lays out HTML in CSS pixels (96 DPI), so convert mm → CSS px
@@ -253,13 +254,13 @@ class ReceiptPrinter:
 <body style="margin:0; padding:0; background:#fff; font-family:'Courier New',Courier,monospace;">
 
 <table width="100%" cellpadding="0" cellspacing="0"
-       style="background:#fff; color:#000; max-width:100%; margin:0 auto;">
+       style="background:#fff; color:#000; max-width:100%; margin:0; padding:0;">
 
   <!-- ── HEADER ──────────────────────────────────────── -->
   <tr>
     <td align="center" style="padding:1px 0;">
       {f'<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:0;">{logo_html}</td></tr></table>' if logo_html else ''}
-      <p style="margin:0; font-size:10px; font-weight:800; color:#000;">{bname}</p>
+      <div style="margin:0; padding:0; font-size:10px; font-weight:800; color:#000; text-align:center;">{bname}</div>
       <table width="100%" cellpadding="0" cellspacing="0">
         {store_info_rows}
       </table>
@@ -349,10 +350,10 @@ class ReceiptPrinter:
   <!-- ── FOOTER ───────────────────────────────────────── -->
   <tr>
     <td align="center" style="padding:2px 2px 4px;">
-      <p style="margin:0 0 2px; font-size:9px; color:#000; font-weight:700;">{footer}</p>
-      <p style="margin:0; font-size:8px; font-weight:700; color:#000;">
+      <div style="margin:0; padding:0 0 2px; font-size:9px; color:#000; font-weight:700;">{footer}</div>
+      <div style="margin:0; padding:0; font-size:8px; font-weight:700; color:#000;">
         Printed {datetime.now().strftime('%d %b %Y  %H:%M')}
-      </p>
+      </div>
     </td>
   </tr>
 

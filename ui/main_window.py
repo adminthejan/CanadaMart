@@ -430,7 +430,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     @pyqtSlot()
     def _on_settings_saved(self):
-        self._setup_window()
+        # Update title and icon only — do NOT call _setup_window() which resizes the window
+        app_name = self.config.get("app_name", "CanadaMart POS")
+        self.setWindowTitle(app_name)
+        logo_path = self.config.get("logo_path", "")
+        if logo_path and os.path.exists(logo_path):
+            self.setWindowIcon(QIcon(logo_path))
         self._apply_theme()
         # Refresh sidebar title, subtitle, and logo
         self._update_sidebar_logo()
