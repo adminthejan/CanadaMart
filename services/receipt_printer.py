@@ -48,41 +48,36 @@ class ReceiptPrinter:
             page_width_mm = float(self.config.get("receipt_paper_width", 80))
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            # HighResolution gives us the printer's real DPI (203 for XP-80C).
-            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            # ScreenResolution → CSS pixels (96 DPI).  doc.print() handles
+            # the scaling to the printer's real DPI automatically —
+            # just like a browser's @media print.
+            printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
             printer.setPrinterName(default_printer_info.printerName())
 
-            # Use a very tall custom page (continuous-paper mode).
-            # The thermal printer only feeds as much paper as needed;
-            # the huge height just prevents Qt from inserting page breaks.
-            continuous_page = QPageSize(QSizeF(page_width_mm, 3000), QPageSize.Unit.Millimeter,
-                                        "Receipt", QPageSize.SizeMatchPolicy.ExactMatch)
+            # Continuous page: 80 mm wide, absurdly tall so Qt never
+            # inserts a page-break.  Thermal printer feeds only what it needs.
+            continuous_page = QPageSize(
+                QSizeF(page_width_mm, 5000),
+                QPageSize.Unit.Millimeter,
+                "Receipt",
+                QPageSize.SizeMatchPolicy.ExactMatch,
+            )
             printer.setPageSize(continuous_page)
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
 
-            # Lay out HTML at 96 CSS-DPI width (standard for QTextDocument).
-            # 80 mm @ 96 DPI ≈ 302 CSS pixels.
-            _CSS_DPI = 96.0
-            css_width = page_width_mm * _CSS_DPI / 25.4
+            # Layout width: 80 mm expressed in CSS pixels (96 DPI).
+            css_width = page_width_mm * 96.0 / 25.4          # ≈ 302 px
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(html_content)
             doc.setTextWidth(css_width)
+            # Make the document's own page match so it won't paginate internally
+            doc.setPageSize(QSizeF(css_width, 50000))
 
-            # Scale the painter so those 302 CSS pixels fill the full
-            # printer width (e.g. 640 dots at 203 DPI).
-            printer_dpi = printer.resolution() or 203
-            scale = printer_dpi / _CSS_DPI          # e.g. 203 / 96 ≈ 2.11
-
-            painter = QPainter()
-            if not painter.begin(printer):
-                print("[Printer] Could not begin QPainter on printer.")
-                return False
-
-            painter.scale(scale, scale)
-            doc.drawContents(painter)
-            painter.end()
+            # doc.print() is the Qt equivalent of window.print() — it
+            # creates a QPainter, scales CSS→device DPI, and renders.
+            doc.print(printer)
 
             print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
             return True
