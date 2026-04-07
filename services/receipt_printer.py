@@ -38,78 +38,47 @@ class ReceiptPrinter:
     # ================================================================ #
     def print_to_windows_default(self, receipt_data: Dict, items: List[Dict],
                                   customer: Optional[Dict] = None) -> bool:
-        """
-        Print directly to the default printer using PyQt6 QPrinter.
-        No print dialog - automatic, seamless printing.
-        
-        Args:
-            receipt_data: Sale information dict
-            items: List of sale items
-            customer: Customer dict (optional)
-            
-        Returns:
-            True on success, False on failure
-        """
+        """Print to the default system printer. Works with thermal 80mm/58mm."""
         try:
-            # 1. Get system default printer
             default_printer_info = QPrinterInfo.defaultPrinter()
             if not default_printer_info or not default_printer_info.printerName():
                 print("[Printer] No default printer found. Falling back to PDF.")
                 return False
 
             page_width_mm = float(self.config.get("receipt_paper_width", 80))
-
-            # 2. Generate receipt HTML
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            # 3. Set up printer with a *temporarily* very tall page so we can
-            #    query the true device-pixel width and lay the document out at
-            #    that width.  HighResolution gives us device-pixel coords.
-            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            # ScreenResolution (96 DPI) – doc.print() scales to the real
+            # printer DPI automatically.  No manual DPI maths needed.
+            printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
             printer.setPrinterName(default_printer_info.printerName())
+
+            # Continuous roll: set a very tall page so Qt never inserts a
+            # page break.  The thermal printer stops when data ends.
             printer.setPageSize(QPageSize(
-                QSizeF(page_width_mm, 5000),        # very tall → no premature pagination
+                QSizeF(page_width_mm, 3000),
                 QPageSize.Unit.Millimeter,
             ))
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
 
-            printer_dpi = printer.resolution() or 203
-            dev_width = printer.pageRect(QPrinter.Unit.DevicePixel).width()
-
-            # 4. Create document and lay out at the printer's device-pixel
-            #    width.  doc.print() uses the same coordinate space, so the
-            #    content will fill the full paper width with no manual scaling.
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(html_content)
-            doc.setTextWidth(dev_width)       # wrap text at printer width
 
-            # 5. Measure actual content height (in device pixels) and convert
-            #    back to mm so we can set the real page height to exactly one
-            #    page = one continuous strip → no cuts.
-            content_h_dev = doc.size().height()
-            content_h_mm  = content_h_dev * 25.4 / printer_dpi + 15  # generous margin
+            # Lay out at the printable page width (in screen-res pixels).
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            doc.setTextWidth(page_rect.width())
 
-            # 6. Set the final page size to the exact content height
-            printer.setPageSize(QPageSize(
-                QSizeF(page_width_mm, content_h_mm),
-                QPageSize.Unit.Millimeter,
-            ))
-            printer.setPageMargins(QMarginsF(0, 0, 0, 0))
+            # Make the document's page height tall enough to hold everything
+            # in a single page – this prevents doc.print() from paginating.
+            doc.setPageSize(QSizeF(page_rect.width(), page_rect.height()))
 
-            # 7. Tell the document the final page dimensions so doc.print()
-            #    sees it as a single page (no internal page-breaks).
-            final_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
-            doc.setPageSize(QSizeF(final_rect.width(), final_rect.height()))
-
-            # 8. Print – doc.print() handles all DPI scaling internally
             doc.print(printer)
-
             print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
             return True
-            
+
         except Exception as e:
-            print(f"[Printer] PyQt6 native printing error: {e}")
+            print(f"[Printer] Native printing error: {e}")
             return False
 
     def _generate_receipt_html(self, sale: Dict, items: List[Dict],
