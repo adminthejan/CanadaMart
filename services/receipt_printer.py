@@ -39,7 +39,7 @@ class ReceiptPrinter:
     def print_to_windows_default(self, receipt_data: Dict, items: List[Dict],
                                   customer: Optional[Dict] = None) -> bool:
         """
-        Print directly to the Windows default printer using PyQt6 QPrinter.
+        Print directly to the default printer using PyQt6 QPrinter.
         No print dialog - automatic, seamless printing.
         
         Args:
@@ -62,50 +62,48 @@ class ReceiptPrinter:
             # 2. Generate receipt HTML
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            # 3. Lay out the document at 96 DPI (CSS px) to measure content
-            _CSS_DPI = 96.0
-            css_width = page_width_mm * _CSS_DPI / 25.4          # 80mm ≈ 302 CSS px
-
-            doc = QTextDocument()
-            doc.setDocumentMargin(0)
-            doc.setHtml(html_content)
-            doc.setTextWidth(css_width)                           # wrap text, no pagination
-
-            content_height_css = doc.size().height()
-            content_height_mm  = content_height_css * 25.4 / _CSS_DPI + 5   # +5mm bottom margin
-
-            # 4. Configure QPrinter  ──  HighResolution so we control scaling
+            # 3. Set up printer with a *temporarily* very tall page so we can
+            #    query the true device-pixel width and lay the document out at
+            #    that width.  HighResolution gives us device-pixel coords.
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(default_printer_info.printerName())
             printer.setPageSize(QPageSize(
-                QSizeF(page_width_mm, content_height_mm),
+                QSizeF(page_width_mm, 5000),        # very tall → no premature pagination
                 QPageSize.Unit.Millimeter,
             ))
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
 
-            # Re-measure the actual printable width the driver allows
-            printable_mm = printer.pageRect(QPrinter.Unit.Millimeter).width()
-            if printable_mm > 0 and abs(printable_mm - page_width_mm) > 1:
-                # Driver enforced margins – re-lay out at narrower width
-                css_width = printable_mm * _CSS_DPI / 25.4
-                doc.setTextWidth(css_width)
-
-            # 5. Paint with explicit DPI scaling so content fills the paper
-            #    QPrinter(HighResolution) paints in device pixels at the
-            #    printer's native DPI (e.g. 203).  The document is laid out
-            #    at 96 CSS DPI.  We scale the painter so that CSS px map to
-            #    the correct physical size on paper.
             printer_dpi = printer.resolution() or 203
-            scale = printer_dpi / _CSS_DPI                       # e.g. 203/96 ≈ 2.11×
+            dev_width = printer.pageRect(QPrinter.Unit.DevicePixel).width()
 
-            painter = QPainter()
-            if not painter.begin(printer):
-                print("[Printer] Could not begin QPainter on printer.")
-                return False
+            # 4. Create document and lay out at the printer's device-pixel
+            #    width.  doc.print() uses the same coordinate space, so the
+            #    content will fill the full paper width with no manual scaling.
+            doc = QTextDocument()
+            doc.setDocumentMargin(0)
+            doc.setHtml(html_content)
+            doc.setTextWidth(dev_width)       # wrap text at printer width
 
-            painter.scale(scale, scale)
-            doc.drawContents(painter)                             # one continuous strip
-            painter.end()
+            # 5. Measure actual content height (in device pixels) and convert
+            #    back to mm so we can set the real page height to exactly one
+            #    page = one continuous strip → no cuts.
+            content_h_dev = doc.size().height()
+            content_h_mm  = content_h_dev * 25.4 / printer_dpi + 15  # generous margin
+
+            # 6. Set the final page size to the exact content height
+            printer.setPageSize(QPageSize(
+                QSizeF(page_width_mm, content_h_mm),
+                QPageSize.Unit.Millimeter,
+            ))
+            printer.setPageMargins(QMarginsF(0, 0, 0, 0))
+
+            # 7. Tell the document the final page dimensions so doc.print()
+            #    sees it as a single page (no internal page-breaks).
+            final_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            doc.setPageSize(QSizeF(final_rect.width(), final_rect.height()))
+
+            # 8. Print – doc.print() handles all DPI scaling internally
+            doc.print(printer)
 
             print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
             return True
