@@ -707,12 +707,14 @@ class ShopifySyncWorker(QObject):
                         self.db.update_variant(local_variant["id"], variant_data)
                     else:
                         # Try SKU match
+                        matched = False
                         if sv_sku:
                             lv_sku = self.db.get_variant_by_sku(sv_sku)
                             if lv_sku and lv_sku["product_id"] == parent_id:
                                 self.db.update_variant(lv_sku["id"], variant_data)
-                                continue
-                        self.db.add_variant(variant_data)
+                                matched = True
+                        if not matched:
+                            self.db.add_variant(variant_data)
 
                     # Update parent product price/qty to reflect first variant
                     if sv == sp.variants[0]:
