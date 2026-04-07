@@ -57,49 +57,56 @@ class ReceiptPrinter:
                 print("[Printer] No default printer found. Falling back to PDF.")
                 return False
 
-            # 2. Configure QPrinter for thermal receipt (80mm width)
-            # Standard thermal paper: 80mm width ≈ 3.15 inches
-            # Height is dynamically calculated from actual content
             page_width_mm = float(self.config.get("receipt_paper_width", 80))
-            
-            # 3. Generate receipt HTML
+
+            # 2. Generate receipt HTML
             html_content = self._generate_receipt_html(receipt_data, items, customer)
-            
-            # 4. Create QTextDocument and measure actual content height
+
+            # 3. Lay out the document at 96 DPI (CSS px) to measure content
+            _CSS_DPI = 96.0
+            css_width = page_width_mm * _CSS_DPI / 25.4          # 80mm ≈ 302 CSS px
+
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(html_content)
-            
-            # Lay out at the target width with a very tall page to avoid
-            # premature pagination, so we can measure the true height.
-            _mm_to_px = 96.0 / 25.4
-            doc.setPageSize(QSizeF(page_width_mm * _mm_to_px, 100000))
-            
-            # Convert measured height back to mm, add a small bottom margin
-            content_height_mm = doc.size().height() / _mm_to_px + 5
-            
-            # 5. Set the printer page size to the exact content height
-            #    so the thermal printer treats it as one continuous strip
+            doc.setTextWidth(css_width)                           # wrap text, no pagination
+
+            content_height_css = doc.size().height()
+            content_height_mm  = content_height_css * 25.4 / _CSS_DPI + 5   # +5mm bottom margin
+
+            # 4. Configure QPrinter  ──  HighResolution so we control scaling
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(default_printer_info.printerName())
             printer.setPageSize(QPageSize(
                 QSizeF(page_width_mm, content_height_mm),
-                QPageSize.Unit.Millimeter
+                QPageSize.Unit.Millimeter,
             ))
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
-            
-            # 6. Re-lay out the document at the printer's final page rect
-            _page_mm = printer.pageRect(QPrinter.Unit.Millimeter)
-            doc.setPageSize(
-                QSizeF(
-                    _page_mm.width() * _mm_to_px,
-                    _page_mm.height() * _mm_to_px
-                )
-            )
-            
-            # 7. Print – single page, no cuts
-            doc.print(printer)
-            
+
+            # Re-measure the actual printable width the driver allows
+            printable_mm = printer.pageRect(QPrinter.Unit.Millimeter).width()
+            if printable_mm > 0 and abs(printable_mm - page_width_mm) > 1:
+                # Driver enforced margins – re-lay out at narrower width
+                css_width = printable_mm * _CSS_DPI / 25.4
+                doc.setTextWidth(css_width)
+
+            # 5. Paint with explicit DPI scaling so content fills the paper
+            #    QPrinter(HighResolution) paints in device pixels at the
+            #    printer's native DPI (e.g. 203).  The document is laid out
+            #    at 96 CSS DPI.  We scale the painter so that CSS px map to
+            #    the correct physical size on paper.
+            printer_dpi = printer.resolution() or 203
+            scale = printer_dpi / _CSS_DPI                       # e.g. 203/96 ≈ 2.11×
+
+            painter = QPainter()
+            if not painter.begin(printer):
+                print("[Printer] Could not begin QPainter on printer.")
+                return False
+
+            painter.scale(scale, scale)
+            doc.drawContents(painter)                             # one continuous strip
+            painter.end()
+
             print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
             return True
             
