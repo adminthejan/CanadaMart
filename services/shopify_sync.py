@@ -598,22 +598,23 @@ class ShopifySyncWorker(QObject):
                     continue
 
                 parent_id = None
+                fv = sp.variants[0]
+                fprice = float(getattr(fv, "price", 0) or 0)
                 if local:
                     parent_id = local["id"]
                     self.db.update_product(parent_id, {
                         "name": sp.title,
                         "description": getattr(sp, "body_html", "") or "",
                         "category_id": category_id,
+                        "price": fprice,
                         "shopify_id": str(sp.id),
                         "shopify_synced": 1,
                         "has_variants": 1 if len(sp.variants) > 1 else 0,
                         "last_synced": datetime.now(timezone.utc).isoformat(),
                     })
                 else:
-                    fv = sp.variants[0]
                     fsku = (getattr(fv, "sku", "") or "").strip() or None
                     fbar = (getattr(fv, "barcode", "") or "").strip() or None
-                    fprice = float(getattr(fv, "price", 0) or 0)
                     try:
                         parent_id = self.db.add_product({
                             "name": sp.title,
@@ -640,6 +641,7 @@ class ShopifySyncWorker(QObject):
                             parent_id = conflict["id"]
                             self.db.update_product(parent_id, {
                                 "name": sp.title,
+                                "price": fprice,
                                 "shopify_id": str(sp.id),
                                 "shopify_synced": 1,
                                 "has_variants": 1 if len(sp.variants) > 1 else 0,
@@ -663,7 +665,7 @@ class ShopifySyncWorker(QObject):
                                     self.db.update_product(parent_id, {"image_path": local_img})
 
                 # ── Sync each variant ───────────────────────────────────
-                for sv in sp.variants:
+                for sv_idx, sv in enumerate(sp.variants):
                     sv_id_str = str(sv.id)
                     sv_inv_id = str(getattr(sv, "inventory_item_id", "") or "")
                     sv_sku = (getattr(sv, "sku", "") or "").strip() or None
@@ -717,7 +719,7 @@ class ShopifySyncWorker(QObject):
                             self.db.add_variant(variant_data)
 
                     # Update parent product price/qty to reflect first variant
-                    if sv == sp.variants[0]:
+                    if sv_idx == 0:
                         self.db.update_product(parent_id, {
                             "price": sv_price,
                             "quantity": sv_qty,

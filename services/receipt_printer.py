@@ -58,33 +58,37 @@ class ReceiptPrinter:
                 return False
 
             # 2. Configure QPrinter for thermal receipt (80mm width)
-            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-            printer.setPrinterName(default_printer_info.printerName())
-            
-            # Set custom page size for 80mm thermal roll
             # Standard thermal paper: 80mm width ≈ 3.15 inches
-            # Height adjusts based on content
-            page_width_mm = 80
-            page_height_mm = 150  # Default, will be dynamically calculated
-            
-            # For QPrinter, use setPageSize with QPageSize
-            printer.setPageSize(QPageSize(QSizeF(page_width_mm, page_height_mm), QPageSize.Unit.Millimeter))
-            
-            # No margins for thermal receipt
-            printer.setPageMargins(
-                QMarginsF(0, 0, 0, 0)
-            )
+            # Height is dynamically calculated from actual content
+            page_width_mm = float(self.config.get("receipt_paper_width", 80))
             
             # 3. Generate receipt HTML
             html_content = self._generate_receipt_html(receipt_data, items, customer)
             
-            # 4. Create QTextDocument and render to printer
+            # 4. Create QTextDocument and measure actual content height
             doc = QTextDocument()
-            doc.setDocumentMargin(0)  # remove default internal side margins
+            doc.setDocumentMargin(0)
             doc.setHtml(html_content)
             
-            # QTextDocument lays out HTML in CSS pixels (96 DPI), so convert mm → CSS px
+            # Lay out at the target width with a very tall page to avoid
+            # premature pagination, so we can measure the true height.
             _mm_to_px = 96.0 / 25.4
+            doc.setPageSize(QSizeF(page_width_mm * _mm_to_px, 100000))
+            
+            # Convert measured height back to mm, add a small bottom margin
+            content_height_mm = doc.size().height() / _mm_to_px + 5
+            
+            # 5. Set the printer page size to the exact content height
+            #    so the thermal printer treats it as one continuous strip
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setPrinterName(default_printer_info.printerName())
+            printer.setPageSize(QPageSize(
+                QSizeF(page_width_mm, content_height_mm),
+                QPageSize.Unit.Millimeter
+            ))
+            printer.setPageMargins(QMarginsF(0, 0, 0, 0))
+            
+            # 6. Re-lay out the document at the printer's final page rect
             _page_mm = printer.pageRect(QPrinter.Unit.Millimeter)
             doc.setPageSize(
                 QSizeF(
@@ -93,7 +97,7 @@ class ReceiptPrinter:
                 )
             )
             
-            # 5. Print the document
+            # 7. Print – single page, no cuts
             doc.print(printer)
             
             print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
