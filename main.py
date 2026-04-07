@@ -9,6 +9,14 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# ── Use certifi CA bundle for ALL SSL connections (inc. third-party libs) ─
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except ImportError:
+    pass
+
 # Suppress the harmless Qt/X11 clipboard-manager timeout warning on Linux
 os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.clipboard=false")
 
