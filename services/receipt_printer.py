@@ -45,32 +45,24 @@ class ReceiptPrinter:
                 print("[Printer] No default printer found. Falling back to PDF.")
                 return False
 
-            page_width_mm = float(self.config.get("receipt_paper_width", 80))
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            # ScreenResolution (96 DPI) – doc.print() scales to the real
-            # printer DPI automatically.  No manual DPI maths needed.
+            # ScreenResolution (96 DPI) – doc.print() auto-scales to the
+            # printer's real DPI (203 for XP-80C).  No manual DPI maths.
             printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
             printer.setPrinterName(default_printer_info.printerName())
-
-            # Continuous roll: set a very tall page so Qt never inserts a
-            # page break.  The thermal printer stops when data ends.
-            printer.setPageSize(QPageSize(
-                QSizeF(page_width_mm, 3000),
-                QPageSize.Unit.Millimeter,
-            ))
+            # Don't call setPageSize – respect the driver's configured
+            # paper size and page height.
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(html_content)
 
-            # Lay out at the printable page width (in screen-res pixels).
+            # Lay out at the driver's printable width → fills full paper.
             page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
             doc.setTextWidth(page_rect.width())
-
-            # Make the document's page height tall enough to hold everything
-            # in a single page – this prevents doc.print() from paginating.
+            # Set document page height to match so it stays one page.
             doc.setPageSize(QSizeF(page_rect.width(), page_rect.height()))
 
             doc.print(printer)
