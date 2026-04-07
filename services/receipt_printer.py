@@ -45,27 +45,40 @@ class ReceiptPrinter:
                 print("[Printer] No default printer found. Falling back to PDF.")
                 return False
 
+            page_width_mm = float(self.config.get("receipt_paper_width", 80))
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            # ScreenResolution (96 DPI) – doc.print() auto-scales to the
-            # printer's real DPI (203 for XP-80C).  No manual DPI maths.
-            printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
+            # HighResolution gives us the printer's real DPI (203 for XP-80C).
+            # Page size comes from the driver (user-configured) — don't override.
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(default_printer_info.printerName())
-            # Don't call setPageSize – respect the driver's configured
-            # paper size and page height.
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
+
+            # Lay out HTML at 96 CSS-DPI width (standard for QTextDocument).
+            # 80 mm @ 96 DPI ≈ 302 CSS pixels.
+            _CSS_DPI = 96.0
+            css_width = page_width_mm * _CSS_DPI / 25.4
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(html_content)
+            doc.setTextWidth(css_width)
 
-            # Lay out at the driver's printable width → fills full paper.
-            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
-            doc.setTextWidth(page_rect.width())
-            # Set document page height to match so it stays one page.
-            doc.setPageSize(QSizeF(page_rect.width(), page_rect.height()))
+            # Scale the painter so those 302 CSS pixels fill the full
+            # printer width (e.g. 640 dots at 203 DPI).
+            # Font sizes stay physically correct: 8 CSS-px → 2.1 mm on paper.
+            printer_dpi = printer.resolution() or 203
+            scale = printer_dpi / _CSS_DPI          # e.g. 203 / 96 ≈ 2.11
 
-            doc.print(printer)
+            painter = QPainter()
+            if not painter.begin(printer):
+                print("[Printer] Could not begin QPainter on printer.")
+                return False
+
+            painter.scale(scale, scale)
+            doc.drawContents(painter)
+            painter.end()
+
             print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
             return True
 
