@@ -49,9 +49,15 @@ class ReceiptPrinter:
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
             # HighResolution gives us the printer's real DPI (203 for XP-80C).
-            # Page size comes from the driver (user-configured) — don't override.
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(default_printer_info.printerName())
+
+            # Use a very tall custom page (continuous-paper mode).
+            # The thermal printer only feeds as much paper as needed;
+            # the huge height just prevents Qt from inserting page breaks.
+            continuous_page = QPageSize(QSizeF(page_width_mm, 3000), QPageSize.Unit.Millimeter,
+                                        "Receipt", QPageSize.SizeMatchPolicy.ExactMatch)
+            printer.setPageSize(continuous_page)
             printer.setPageMargins(QMarginsF(0, 0, 0, 0))
 
             # Lay out HTML at 96 CSS-DPI width (standard for QTextDocument).
@@ -66,7 +72,6 @@ class ReceiptPrinter:
 
             # Scale the painter so those 302 CSS pixels fill the full
             # printer width (e.g. 640 dots at 203 DPI).
-            # Font sizes stay physically correct: 8 CSS-px → 2.1 mm on paper.
             printer_dpi = printer.resolution() or 203
             scale = printer_dpi / _CSS_DPI          # e.g. 203 / 96 ≈ 2.11
 
