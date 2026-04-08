@@ -94,7 +94,7 @@ class ReceiptPrinter:
                 return False
 
             page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
-            scale = page_rect.width() / css_width
+            scale = page_rect.width() / css_width * 0.92
             painter.scale(scale, scale)
 
             doc.drawContents(painter)
