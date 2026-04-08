@@ -436,8 +436,23 @@ class SettingsWidget(QWidget):
         printer_group = QGroupBox("Receipt Printer")
         pform = QFormLayout(printer_group)
 
-        info_lbl = QLabel("Receipts are sent to the system default printer automatically.\nNo additional configuration required.")
+        # Printer selection
+        from PyQt6.QtPrintSupport import QPrinterInfo
+        self._printer_combo = QComboBox()
+        self._printer_combo.addItem("(System Default)", "")
+        for pi in QPrinterInfo.availablePrinters():
+            name = pi.printerName()
+            if name:
+                self._printer_combo.addItem(name, name)
+        saved_printer = self.db.get_setting("receipt_printer_name", "")
+        idx = self._printer_combo.findData(saved_printer)
+        if idx >= 0:
+            self._printer_combo.setCurrentIndex(idx)
+        pform.addRow("Printer", self._printer_combo)
+
+        info_lbl = QLabel("Select your thermal printer above, or leave as System Default.")
         info_lbl.setWordWrap(True)
+        info_lbl.setStyleSheet("color:#94a3b8; font-size:11px;")
         pform.addRow(info_lbl)
 
         test_print_btn = QPushButton("🖨 Print Test Receipt")
@@ -637,6 +652,7 @@ class SettingsWidget(QWidget):
             "receipt_footer": self._receipt_footer.toPlainText().strip(),
             "receipt_copies": self._receipt_copies.value(),
             "receipt_paper_width": int(self._receipt_paper_width.currentText()),
+            "receipt_printer_name": self._printer_combo.currentData() or "",
             "receipt_show_logo": self._receipt_show_logo.isChecked(),
             "receipt_show_barcode": self._receipt_show_barcode.isChecked(),
             "receipt_logo_path": self._receipt_logo_path.text().strip(),

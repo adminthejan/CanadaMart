@@ -40,46 +40,56 @@ class ReceiptPrinter:
                                   customer: Optional[Dict] = None) -> bool:
         """Print to the default system printer. Works with thermal 80mm/58mm."""
         try:
-            default_printer_info = QPrinterInfo.defaultPrinter()
-            if not default_printer_info or not default_printer_info.printerName():
-                print("[Printer] No default printer found. Falling back to PDF.")
+            # Determine target printer: explicit setting or system default
+            configured_name = self.config.get("receipt_printer_name", "").strip()
+            if configured_name:
+                printer_info = None
+                for pi in QPrinterInfo.availablePrinters():
+                    if pi.printerName() == configured_name:
+                        printer_info = pi
+                        break
+                if not printer_info:
+                    print(f"[Printer] Configured printer '{configured_name}' not found, trying default.")
+                    printer_info = QPrinterInfo.defaultPrinter()
+            else:
+                printer_info = QPrinterInfo.defaultPrinter()
+
+            if not printer_info or not printer_info.printerName():
+                print("[Printer] No printer found. Falling back to PDF.")
                 return False
 
             page_width_mm = float(self.config.get("receipt_paper_width", 80))
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            # ScreenResolution → CSS pixels (96 DPI).  doc.print() handles
-            # the scaling to the printer's real DPI automatically —
-            # just like a browser's @media print.
             printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
-            printer.setPrinterName(default_printer_info.printerName())
+            printer.setPrinterName(printer_info.printerName())
 
-            # Continuous page: 80 mm wide, absurdly tall so Qt never
-            # inserts a page-break.  Thermal printer feeds only what it needs.
+            # ── Page setup for thermal printers ─────────────────────────
+            # Use a reasonably tall page (297mm = A4 height) instead of
+            # an extreme 5000mm which many thermal drivers reject.
+            # Thermal printers auto-cut / feed only the printed area.
             continuous_page = QPageSize(
-                QSizeF(page_width_mm, 5000),
+                QSizeF(page_width_mm, 297),
                 QPageSize.Unit.Millimeter,
                 "Receipt",
-                QPageSize.SizeMatchPolicy.ExactMatch,
+                QPageSize.SizeMatchPolicy.FuzzyMatch,
             )
             printer.setPageSize(continuous_page)
-            printer.setPageMargins(QMarginsF(0, 0, 0, 0))
+            printer.setPageMargins(QMarginsF(2, 2, 2, 2))
+            printer.setFullPage(False)
 
-            # Layout width: 80 mm expressed in CSS pixels (96 DPI).
-            css_width = page_width_mm * 96.0 / 25.4          # ≈ 302 px
+            # Layout width: page_width_mm minus 4mm margins in CSS pixels (96 DPI)
+            css_width = (page_width_mm - 4) * 96.0 / 25.4
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setHtml(html_content)
             doc.setTextWidth(css_width)
-            # Make the document's own page match so it won't paginate internally
             doc.setPageSize(QSizeF(css_width, 50000))
 
-            # doc.print() is the Qt equivalent of window.print() — it
-            # creates a QPainter, scales CSS→device DPI, and renders.
             doc.print(printer)
 
-            print(f"[Printer] Receipt printed to '{default_printer_info.printerName()}'")
+            print(f"[Printer] Receipt printed to '{printer_info.printerName()}'")
             return True
 
         except Exception as e:
@@ -410,7 +420,7 @@ class ReceiptPrinter:
                              copies: int) -> bool:
         """Print barcode label using PyQt6 native printer."""
         try:
-            from PyQt6.QtGui import QPixmap
+            from PyQt6.QtGui import QPixmap, QImage
 
             default_printer_info = QPrinterInfo.defaultPrinter()
             if not default_printer_info or not default_printer_info.printerName():
@@ -430,8 +440,23 @@ class ReceiptPrinter:
             # Convert barcode image to QPixmap
             if isinstance(barcode_image, str):
                 pixmap = QPixmap(barcode_image)
-            else:
+            elif isinstance(barcode_image, QImage):
                 pixmap = QPixmap.fromImage(barcode_image)
+            else:
+                # PIL Image → convert to QImage via raw bytes
+                from PIL import Image as PILImage
+                if isinstance(barcode_image, PILImage.Image):
+                    rgb = barcode_image.convert("RGBA")
+                    data = rgb.tobytes("raw", "RGBA")
+                    qimg = QImage(data, rgb.width, rgb.height, QImage.Format.Format_RGBA8888)
+                    # Copy so the QImage owns its data (not dependent on PIL buffer)
+                    pixmap = QPixmap.fromImage(qimg.copy())
+                else:
+                    pixmap = QPixmap.fromImage(barcode_image)
+
+            if pixmap.isNull():
+                print("[Printer] Barcode pixmap is null – cannot print.")
+                return False
 
             painter = QPainter()
             if not painter.begin(printer):

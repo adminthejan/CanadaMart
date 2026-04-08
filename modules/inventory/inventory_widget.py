@@ -987,13 +987,17 @@ class BarcodePreviewDialog(QDialog):
         self._build()
 
     def _build(self):
-        from PIL.ImageQt import ImageQt
         layout = QVBoxLayout(self)
         
         lbl = QLabel()
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        qim = ImageQt(self.pil_image)
-        pix = QPixmap.fromImage(qim)
+
+        # Convert PIL Image → QPixmap safely (no PIL.ImageQt dependency)
+        rgb = self.pil_image.convert("RGBA")
+        data = rgb.tobytes("raw", "RGBA")
+        qimg = QImage(data, rgb.width, rgb.height, QImage.Format.Format_RGBA8888)
+        # .copy() makes QImage own the data so it survives after 'data' is GC'd
+        pix = QPixmap.fromImage(qimg.copy())
         
         width_mm = float(self.settings.get("barcode_label_width_mm", 50.0))
         height_mm = float(self.settings.get("barcode_label_height_mm", 25.0))

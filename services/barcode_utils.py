@@ -1,4 +1,5 @@
 import io
+import os
 from PIL import Image, ImageDraw, ImageFont
 import barcode
 from barcode.writer import ImageWriter
@@ -95,9 +96,15 @@ def generate_barcode_image(data_str: str, product_name: str, settings: dict = No
     try:
         font_large = ImageFont.truetype("arial.ttf", max(16, int(target_h * 0.12)))
         font_small = ImageFont.truetype("arial.ttf", max(12, int(target_h * 0.08)))
-    except IOError:
-        font_large = ImageFont.load_default()
-        font_small = ImageFont.load_default()
+    except (IOError, OSError):
+        # Fallback: try Windows system fonts directory (needed in PyInstaller exe)
+        try:
+            win_font = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "arial.ttf")
+            font_large = ImageFont.truetype(win_font, max(16, int(target_h * 0.12)))
+            font_small = ImageFont.truetype(win_font, max(12, int(target_h * 0.08)))
+        except (IOError, OSError):
+            font_large = ImageFont.load_default()
+            font_small = ImageFont.load_default()
         
     y_cursor = int(target_h * 0.05)
     

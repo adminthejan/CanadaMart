@@ -87,7 +87,31 @@ def build_splash(config: AppConfig) -> QSplashScreen:
     return splash
 
 
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    """Show unhandled exceptions in a message box instead of silently crashing."""
+    import traceback
+    tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    try:
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+        app = QApplication.instance()
+        if app:
+            QMessageBox.critical(None, "Unexpected Error", tb_text[-2000:])
+    except Exception:
+        pass
+    # Also write to a crash log next to the exe
+    try:
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "crash.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n{tb_text}")
+    except Exception:
+        pass
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
 def main():
+    # ── Global crash handler ─────────────────────────────────────────────
+    sys.excepthook = _global_exception_handler
+
     # ── High-DPI support ─────────────────────────────────────────────────
     os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 
