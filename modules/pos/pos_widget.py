@@ -172,7 +172,7 @@ class _NumPad(QWidget):
         for key, label in self._MODES:
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setMinimumHeight(38)
+            btn.setMinimumHeight(32)
             btn.setStyleSheet("font-size:12px; font-weight:600;")
             btn.clicked.connect(lambda _, k=key: self._set_mode(k))
             self._mode_btns[key] = btn
@@ -186,8 +186,8 @@ class _NumPad(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         self._display.setStyleSheet(
-            "background:#0f172a; color:#f1f5f9; font-size:24px; font-weight:700;"
-            "border-radius:6px; padding:4px 12px; min-height:36px;"
+            "background:#0f172a; color:#f1f5f9; font-size:20px; font-weight:700;"
+            "border-radius:6px; padding:2px 10px; min-height:30px;"
         )
         root.addWidget(self._display)
 
@@ -202,11 +202,11 @@ class _NumPad(QWidget):
         ]
         for lbl, r, c, rs, cs in pad_def:
             btn = QPushButton(lbl)
-            btn.setMinimumSize(48, 44)
-            btn.setStyleSheet("font-size:16px; font-weight:600;")
+            btn.setMinimumSize(44, 38)
+            btn.setStyleSheet("font-size:15px; font-weight:600;")
             if lbl == "✓":
                 btn.setObjectName("SuccessBtn")
-                btn.setMinimumHeight(44)
+                btn.setMinimumHeight(38)
                 btn.clicked.connect(self._apply)
             elif lbl == "⌫":
                 btn.clicked.connect(self._backspace)
@@ -748,11 +748,15 @@ class POSWidget(QWidget):
 
         splitter.addWidget(left)
 
-        # RIGHT – cart + numpad
+        # RIGHT – cart + numpad (wrapped in scroll area for small screens)
+        right_scroll = QScrollArea()
+        right_scroll.setObjectName("CartPanel")
+        right_scroll.setMinimumWidth(400)
+        right_scroll.setMaximumWidth(500)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         right = QWidget()
-        right.setObjectName("CartPanel")
-        right.setMinimumWidth(400)
-        right.setMaximumWidth(500)
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(12, 12, 12, 12)
         right_layout.setSpacing(6)
@@ -790,7 +794,7 @@ class POSWidget(QWidget):
         self._cart_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._cart_table.verticalHeader().hide()
         self._cart_table.setAlternatingRowColors(True)
-        self._cart_table.setMinimumHeight(160)
+        self._cart_table.setMinimumHeight(120)
         self._cart_table.cellClicked.connect(self._on_cart_row_clicked)
         right_layout.addWidget(self._cart_table, 1)
 
@@ -802,7 +806,7 @@ class POSWidget(QWidget):
             ("+", lambda: self._change_qty(1), ""),
         ]:
             btn = QPushButton(lbl)
-            btn.setMinimumSize(58, 52)
+            btn.setMinimumSize(52, 44)
             btn.setStyleSheet("font-size:20px; font-weight:700;")
             if obj:
                 btn.setObjectName(obj)
@@ -843,19 +847,20 @@ class POSWidget(QWidget):
 
         clear_btn = QPushButton("🗑  Clear Order")
         clear_btn.setObjectName("DangerBtn")
-        clear_btn.setMinimumHeight(48)
+        clear_btn.setMinimumHeight(44)
         clear_btn.clicked.connect(self._clear_cart)
 
         pay_btn = QPushButton("💰  CHARGE CUSTOMER")
         pay_btn.setObjectName("SuccessBtn")
-        pay_btn.setMinimumHeight(64)
+        pay_btn.setMinimumHeight(56)
         pay_btn.setStyleSheet("font-size:17px; font-weight:700; border-radius:10px; background:#16a34a; color:white;")
         pay_btn.clicked.connect(self._process_payment)
 
         right_layout.addWidget(clear_btn)
         right_layout.addWidget(pay_btn)
 
-        splitter.addWidget(right)
+        right_scroll.setWidget(right)
+        splitter.addWidget(right_scroll)
         splitter.setSizes([820, 420])
 
     def _on_cart_row_clicked(self, row: int, _col: int):
