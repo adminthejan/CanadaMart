@@ -61,13 +61,10 @@ class ReceiptPrinter:
             page_width_mm = float(self.config.get("receipt_paper_width", 80))
             html_content = self._generate_receipt_html(receipt_data, items, customer)
 
-            printer = QPrinter(QPrinter.PrinterMode.ScreenResolution)
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(printer_info.printerName())
 
             # ── Page setup for thermal printers ─────────────────────────
-            # Use a reasonably tall page (297mm = A4 height) instead of
-            # an extreme 5000mm which many thermal drivers reject.
-            # Thermal printers auto-cut / feed only the printed area.
             continuous_page = QPageSize(
                 QSizeF(page_width_mm, 297),
                 QPageSize.Unit.Millimeter,
@@ -78,8 +75,9 @@ class ReceiptPrinter:
             printer.setPageMargins(QMarginsF(2, 2, 2, 2))
             printer.setFullPage(False)
 
-            # Layout width: page_width_mm minus 4mm margins in CSS pixels (96 DPI)
-            css_width = (page_width_mm - 4) * 96.0 / 25.4
+            # Layout document at 96 DPI (CSS pixels)
+            layout_dpi = 96.0
+            css_width = (page_width_mm - 4) * layout_dpi / 25.4
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)
@@ -87,7 +85,19 @@ class ReceiptPrinter:
             doc.setTextWidth(css_width)
             doc.setPageSize(QSizeF(css_width, 50000))
 
-            doc.print(printer)
+            # Paint with explicit scaling: layout is 96 DPI, scale up
+            # to fill the printer's actual page width at its native DPI.
+            painter = QPainter()
+            if not painter.begin(printer):
+                print("[Printer] Failed to begin QPainter on printer.")
+                return False
+
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            scale = page_rect.width() / css_width
+            painter.scale(scale, scale)
+
+            doc.drawContents(painter)
+            painter.end()
 
             print(f"[Printer] Receipt printed to '{printer_info.printerName()}'")
             return True
@@ -131,7 +141,7 @@ class ReceiptPrinter:
                     b64 = base64.b64encode(bytes(buf)).decode()
                     logo_html = (
                         f'<img src="data:image/png;base64,{b64}" '
-                        f'style="max-width:200px; max-height:80px;"/>'
+                        f'style="max-width:180px; max-height:70px;"/>'
                     )
             except Exception:
                 pass
@@ -141,8 +151,8 @@ class ReceiptPrinter:
         for line in [tagline, addr, phone, email, header]:
             if line:
                 store_info_rows += (
-                    f'<tr><td align="center" style="font-size:28px; color:#000; '
-                    f'font-weight:700; padding:4px 0;">{line}</td></tr>'
+                    f'<tr><td align="center" style="font-size:13px; color:#000; '
+                    f'font-weight:700; padding:1px 0;">{line}</td></tr>'
                 )
 
         # -- item rows ----------------------------------------------------
@@ -156,17 +166,17 @@ class ReceiptPrinter:
             disc_badge = ""
             if disc > 0:
                 disc_badge = (
-                    f' <span style="font-size:26px; color:#000; '
+                    f' <span style="font-size:12px; color:#000; '
                     f'font-weight:bold;">[-{disc:.0f}%]</span>'
                 )
             rows_html += f"""
             <tr>
-              <td style="padding:8px 0; border-bottom:1px solid #000; vertical-align:middle;
-                         font-size:28px; font-weight:700; color:#000;">{name}{disc_badge}</td>
-              <td style="padding:8px 0; border-bottom:1px solid #000; vertical-align:middle;
-                         text-align:center; font-size:28px; font-weight:700; color:#000; white-space:nowrap;">{qty}x{sym}{price:.2f}</td>
-              <td style="padding:8px 0; border-bottom:1px solid #000; vertical-align:middle;
-                         text-align:right; font-size:28px; font-weight:700; color:#000; white-space:nowrap;">{sym}{itotal:.2f}</td>
+              <td style="padding:3px 0; border-bottom:1px solid #000; vertical-align:middle;
+                         font-size:13px; font-weight:700; color:#000;">{name}{disc_badge}</td>
+              <td style="padding:3px 0; border-bottom:1px solid #000; vertical-align:middle;
+                         text-align:center; font-size:13px; font-weight:700; color:#000; white-space:nowrap;">{qty}x{sym}{price:.2f}</td>
+              <td style="padding:3px 0; border-bottom:1px solid #000; vertical-align:middle;
+                         text-align:right; font-size:13px; font-weight:700; color:#000; white-space:nowrap;">{sym}{itotal:.2f}</td>
             </tr>"""
 
         # -- totals -------------------------------------------------------
@@ -182,38 +192,38 @@ class ReceiptPrinter:
         if disc_amt > 0:
             totals_html += f"""
             <tr>
-              <td style="padding:6px 0; font-size:30px; font-weight:700; color:#000;">Subtotal</td>
-              <td style="padding:6px 0; font-size:30px; font-weight:700; color:#000; text-align:right;">{sym}{subtotal:.2f}</td>
+              <td style="padding:2px 0; font-size:14px; font-weight:700; color:#000;">Subtotal</td>
+              <td style="padding:2px 0; font-size:14px; font-weight:700; color:#000; text-align:right;">{sym}{subtotal:.2f}</td>
             </tr>
             <tr>
-              <td style="padding:6px 0; font-size:30px; font-weight:700; color:#000;">Discount</td>
-              <td style="padding:6px 0; font-size:30px; font-weight:700; color:#000; text-align:right;">-{sym}{disc_amt:.2f}</td>
+              <td style="padding:2px 0; font-size:14px; font-weight:700; color:#000;">Discount</td>
+              <td style="padding:2px 0; font-size:14px; font-weight:700; color:#000; text-align:right;">-{sym}{disc_amt:.2f}</td>
             </tr>"""
         if tax > 0:
             totals_html += f"""
             <tr>
-              <td style="padding:6px 0; font-size:30px; font-weight:700; color:#000;">{tax_name}</td>
-              <td style="padding:6px 0; font-size:30px; font-weight:700; color:#000; text-align:right;">{sym}{tax:.2f}</td>
+              <td style="padding:2px 0; font-size:14px; font-weight:700; color:#000;">{tax_name}</td>
+              <td style="padding:2px 0; font-size:14px; font-weight:700; color:#000; text-align:right;">{sym}{tax:.2f}</td>
             </tr>"""
 
         totals_html += f"""
             <tr>
-              <td style="padding:10px 0; font-size:36px; font-weight:800; color:#000;
-                         border-top:3px solid #000;">TOTAL</td>
-              <td style="padding:10px 0; font-size:36px; font-weight:800; color:#000;
-                         border-top:3px solid #000; text-align:right;">{sym}{total:.2f}</td>
+              <td style="padding:4px 0; font-size:18px; font-weight:800; color:#000;
+                         border-top:2px solid #000;">TOTAL</td>
+              <td style="padding:4px 0; font-size:18px; font-weight:800; color:#000;
+                         border-top:2px solid #000; text-align:right;">{sym}{total:.2f}</td>
             </tr>
             <tr>
-              <td style="padding:6px 0; font-size:28px; font-weight:700; color:#000;
-                         border-bottom:2px solid #000;">Paid ({method})</td>
-              <td style="padding:6px 0; font-size:28px; font-weight:700; color:#000;
-                         border-bottom:2px solid #000; text-align:right;">{sym}{paid:.2f}</td>
+              <td style="padding:2px 0; font-size:13px; font-weight:700; color:#000;
+                         border-bottom:1px solid #000;">Paid ({method})</td>
+              <td style="padding:2px 0; font-size:13px; font-weight:700; color:#000;
+                         border-bottom:1px solid #000; text-align:right;">{sym}{paid:.2f}</td>
             </tr>"""
         if change > 0:
             totals_html += f"""
             <tr>
-              <td style="padding:6px 0; font-size:30px; color:#000; font-weight:700;">Change Due</td>
-              <td style="padding:6px 0; font-size:30px; color:#000; font-weight:700;
+              <td style="padding:2px 0; font-size:14px; color:#000; font-weight:700;">Change Due</td>
+              <td style="padding:2px 0; font-size:14px; color:#000; font-weight:700;
                          text-align:right;">{sym}{change:.2f}</td>
             </tr>"""
 
@@ -227,8 +237,8 @@ class ReceiptPrinter:
                 cust_line += f"&nbsp;&nbsp;{cust_mob}"
             cust_html = f"""
             <tr>
-              <td colspan="2" style="padding:6px 4px; font-size:28px; color:#000;">
-                <span style="font-size:26px; font-weight:700;">CUSTOMER:</span>&nbsp;
+              <td colspan="2" style="padding:2px 2px; font-size:13px; color:#000;">
+                <span style="font-size:12px; font-weight:700;">CUSTOMER:</span>&nbsp;
                 <span style="font-weight:600;">{cust_line}</span>
               </td>
             </tr>"""
@@ -236,24 +246,24 @@ class ReceiptPrinter:
         if sale.get("notes"):
             cust_html += f"""
             <tr>
-              <td colspan="2" style="padding:6px 4px; font-size:28px; color:#000;">
-                <span style="font-size:26px; font-weight:700;">NOTE:</span>&nbsp;{sale['notes']}
+              <td colspan="2" style="padding:2px 2px; font-size:13px; color:#000;">
+                <span style="font-size:12px; font-weight:700;">NOTE:</span>&nbsp;{sale['notes']}
               </td>
             </tr>"""
 
         return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
-<body style="margin:0; padding:8px; background:#fff; font-family:'Courier New',Courier,monospace;">
+<body style="margin:0; padding:2px; background:#fff; font-family:'Courier New',Courier,monospace;">
 
 <table width="100%" cellpadding="0" cellspacing="0"
        style="background:#fff; color:#000; max-width:100%; margin:0; padding:0;">
 
   <!-- ── HEADER ──────────────────────────────────────── -->
   <tr>
-    <td align="center" style="padding:8px 0;">
-      {f'<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:8px 0;">{logo_html}</td></tr></table>' if logo_html else ''}
-      <div style="margin:0; padding:8px 0; font-size:36px; font-weight:800; color:#000; text-align:center;">{bname}</div>
+    <td align="center" style="padding:2px 0;">
+      {f'<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:2px 0;">{logo_html}</td></tr></table>' if logo_html else ''}
+      <div style="margin:0; padding:2px 0; font-size:16px; font-weight:800; color:#000; text-align:center;">{bname}</div>
       <table width="100%" cellpadding="0" cellspacing="0">
         {store_info_rows}
       </table>
@@ -262,21 +272,21 @@ class ReceiptPrinter:
 
   <!-- ── DIVIDER ──────────────────────────────────────── -->
   <tr>
-    <td style="border-top:3px solid #000; font-size:0; padding:6px 0;">&nbsp;</td>
+    <td style="border-top:2px solid #000; font-size:0; padding:2px 0;">&nbsp;</td>
   </tr>
 
   <!-- ── INVOICE META ──────────────────────────────────── -->
   <tr>
-    <td style="padding:8px 0;">
+    <td style="padding:3px 0;">
       <table width="100%" cellpadding="0" cellspacing="0">
         <tr>
           <td style="vertical-align:top;">
-            <span style="font-size:26px; color:#000; font-weight:700;">INVOICE</span><br>
-            <span style="font-size:30px; font-weight:700; color:#000;">{sale.get('invoice_number', '')}</span>
+            <span style="font-size:11px; color:#000; font-weight:700;">INVOICE</span><br>
+            <span style="font-size:13px; font-weight:700; color:#000;">{sale.get('invoice_number', '')}</span>
           </td>
           <td align="right" style="vertical-align:top;">
-            <span style="font-size:26px; color:#000; font-weight:700;">DATE</span><br>
-            <span style="font-size:28px; font-weight:700; color:#000;">{dt}</span>
+            <span style="font-size:11px; color:#000; font-weight:700;">DATE</span><br>
+            <span style="font-size:13px; font-weight:700; color:#000;">{dt}</span>
           </td>
         </tr>
       </table>
@@ -284,7 +294,7 @@ class ReceiptPrinter:
   </tr>
 
   <!-- ── CUSTOMER / NOTE ─────────────────────────────── -->
-  {f"""<tr><td style="padding:2px 4px;">
+  {f"""<tr><td style="padding:1px 2px;">
     <table width="100%" cellpadding="0" cellspacing="0">
       {cust_html}
     </table>
@@ -292,7 +302,7 @@ class ReceiptPrinter:
 
   <!-- ── DOTTED DIVIDER ──────────────────────────────── -->
   <tr>
-    <td style="border-top:3px dashed #000; font-size:0; padding:6px 0;">&nbsp;</td>
+    <td style="border-top:2px dashed #000; font-size:0; padding:2px 0;">&nbsp;</td>
   </tr>
 
   <!-- ── ITEMS TABLE ──────────────────────────────────── -->
@@ -301,15 +311,15 @@ class ReceiptPrinter:
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border-collapse:collapse;">
         <thead>
-          <tr style="border-bottom:3px solid #000;">
+          <tr style="border-bottom:2px solid #000;">
             <th align="left"
-                style="padding:8px 0; font-size:28px; color:#000;
+                style="padding:3px 0; font-size:13px; color:#000;
                        font-weight:700; text-transform:uppercase;">Item</th>
             <th align="center"
-                style="padding:8px 0; font-size:28px; color:#000;
+                style="padding:3px 0; font-size:13px; color:#000;
                        font-weight:700; text-transform:uppercase;">Qty</th>
             <th align="right"
-                style="padding:8px 0; font-size:28px; color:#000;
+                style="padding:3px 0; font-size:13px; color:#000;
                        font-weight:700; text-transform:uppercase;">Amt</th>
           </tr>
         </thead>
@@ -322,12 +332,12 @@ class ReceiptPrinter:
 
   <!-- ── DOTTED DIVIDER ──────────────────────────────── -->
   <tr>
-    <td style="border-top:3px dashed #000; font-size:0; padding:6px 0;">&nbsp;</td>
+    <td style="border-top:2px dashed #000; font-size:0; padding:2px 0;">&nbsp;</td>
   </tr>
 
   <!-- ── TOTALS ───────────────────────────────────────── -->
   <tr>
-    <td style="padding:0 0 6px 0;">
+    <td style="padding:0 0 2px 0;">
       <table width="100%" cellpadding="0" cellspacing="0"
              style="border-collapse:collapse;">
         {totals_html}
@@ -337,14 +347,14 @@ class ReceiptPrinter:
 
   <!-- ── SOLID DIVIDER ───────────────────────────────── -->
   <tr>
-    <td style="border-top:3px solid #000; font-size:0; padding:6px 0;">&nbsp;</td>
+    <td style="border-top:2px solid #000; font-size:0; padding:2px 0;">&nbsp;</td>
   </tr>
 
   <!-- ── FOOTER ───────────────────────────────────────── -->
   <tr>
-    <td align="center" style="padding:10px 4px 12px;">
-      <div style="margin:0; padding:0 0 6px; font-size:28px; color:#000; font-weight:700;">{footer}</div>
-      <div style="margin:0; padding:0; font-size:24px; font-weight:700; color:#000;">
+    <td align="center" style="padding:4px 2px 6px;">
+      <div style="margin:0; padding:0 0 2px; font-size:13px; color:#000; font-weight:700;">{footer}</div>
+      <div style="margin:0; padding:0; font-size:11px; font-weight:700; color:#000;">
         Printed {datetime.now().strftime('%d %b %Y  %H:%M')}
       </div>
     </td>
