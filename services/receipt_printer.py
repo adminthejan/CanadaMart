@@ -72,12 +72,13 @@ class ReceiptPrinter:
                 QPageSize.SizeMatchPolicy.FuzzyMatch,
             )
             printer.setPageSize(continuous_page)
-            printer.setPageMargins(QMarginsF(2, 2, 2, 2))
+            printer.setPageMargins(QMarginsF(4, 2, 4, 2))
             printer.setFullPage(False)
 
             # Layout document at 96 DPI (CSS pixels)
+            # Subtract 8mm total margins (4 left + 4 right)
             layout_dpi = 96.0
-            css_width = (page_width_mm - 4) * layout_dpi / 25.4
+            css_width = (page_width_mm - 8) * layout_dpi / 25.4
 
             doc = QTextDocument()
             doc.setDocumentMargin(0)
