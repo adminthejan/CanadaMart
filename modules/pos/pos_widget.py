@@ -187,7 +187,7 @@ class _NumPad(QWidget):
         )
         self._display.setStyleSheet(
             "background:#0f172a; color:#f1f5f9; font-size:24px; font-weight:700;"
-            "border-radius:6px; padding:4px 12px; min-height:44px;"
+            "border-radius:6px; padding:4px 12px; min-height:36px;"
         )
         root.addWidget(self._display)
 
@@ -202,11 +202,11 @@ class _NumPad(QWidget):
         ]
         for lbl, r, c, rs, cs in pad_def:
             btn = QPushButton(lbl)
-            btn.setMinimumSize(52, 52)
+            btn.setMinimumSize(48, 44)
             btn.setStyleSheet("font-size:16px; font-weight:600;")
             if lbl == "✓":
                 btn.setObjectName("SuccessBtn")
-                btn.setMinimumHeight(52)
+                btn.setMinimumHeight(44)
                 btn.clicked.connect(self._apply)
             elif lbl == "⌫":
                 btn.clicked.connect(self._backspace)
@@ -790,6 +790,7 @@ class POSWidget(QWidget):
         self._cart_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._cart_table.verticalHeader().hide()
         self._cart_table.setAlternatingRowColors(True)
+        self._cart_table.setMinimumHeight(160)
         self._cart_table.cellClicked.connect(self._on_cart_row_clicked)
         right_layout.addWidget(self._cart_table, 1)
 
