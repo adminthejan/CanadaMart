@@ -429,24 +429,42 @@ class ReceiptPrinter:
     def _print_barcode_native(self, barcode_image, product_name: str,
                              price_str: str, settings: dict,
                              copies: int) -> bool:
-        """Print barcode label using PyQt6 native printer."""
+        """Print barcode label using PyQt6 native printer.
+
+        Each copy is sent as a separate page so the label printer
+        advances one sticker per copy.
+        """
         try:
-            from PyQt6.QtGui import QPixmap, QImage
+            from PyQt6.QtGui import QPixmap, QImage, QPageLayout
 
             default_printer_info = QPrinterInfo.defaultPrinter()
             if not default_printer_info or not default_printer_info.printerName():
                 return False
 
+            # Label dimensions from settings
+            label_w = float(settings.get("barcode_label_width_mm", 30.0))
+            label_h = float(settings.get("barcode_label_height_mm", 20.0))
+
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setPrinterName(default_printer_info.printerName())
 
-            # Label size from settings
-            label_w = float(settings.get("barcode_label_width_mm", 50.0))
-            label_h = float(settings.get("barcode_label_height_mm", 25.0))
+            # Build a custom page size that exactly matches the sticker.
+            label_size = QPageSize(
+                QSizeF(label_w, label_h),
+                QPageSize.Unit.Millimeter,
+                "Barcode Label",
+                QPageSize.SizeMatchPolicy.ExactMatch,
+            )
 
-            printer.setPageSize(QPageSize(QSizeF(label_w, label_h), QPageSize.Unit.Millimeter))
-            printer.setPageMargins(QMarginsF(2, 2, 2, 2))
-            printer.setCopyCount(copies)
+            # Apply via QPageLayout — zero margins, portrait.
+            layout = QPageLayout(
+                label_size,
+                QPageLayout.Orientation.Portrait,
+                QMarginsF(0, 0, 0, 0),
+                QPageLayout.Unit.Millimeter,
+            )
+            printer.setPageLayout(layout)
+            printer.setFullPage(True)
 
             # Convert barcode image to QPixmap
             if isinstance(barcode_image, str):
@@ -473,9 +491,12 @@ class ReceiptPrinter:
             if not painter.begin(printer):
                 return False
 
-            # Draw the barcode image scaled to fill the printable page rect
+            # Paint each copy on its own page (one sticker per page)
             page_rect = printer.pageRect(QPrinter.Unit.DevicePixel).toRect()
-            painter.drawPixmap(page_rect, pixmap)
+            for i in range(copies):
+                if i > 0:
+                    printer.newPage()
+                painter.drawPixmap(page_rect, pixmap)
 
             painter.end()
             print(f"[Printer] Barcode label sent to printer ({copies} copies)")
@@ -486,24 +507,35 @@ class ReceiptPrinter:
             return False
     def _generate_barcode_pdf(self, barcode_image, settings: dict, 
                              copies: int) -> Optional[str]:
-        """Generate PDF barcode labels."""
+        """Generate PDF barcode labels – one sticker per page."""
         try:
             from reportlab.lib.units import mm
             from reportlab.pdfgen import canvas
             from reportlab.lib.utils import ImageReader
+            from PIL import Image as PILImage
             
             fd, path = tempfile.mkstemp(suffix=".pdf")
             os.close(fd)
             
-            width_mm = float(settings.get("barcode_label_width_mm", 50.0))
-            height_mm = float(settings.get("barcode_label_height_mm", 25.0))
-            
-            c = canvas.Canvas(path, pagesize=(width_mm * mm, height_mm * mm))
-            img_reader = ImageReader(barcode_image)
-            
+            width_mm = float(settings.get("barcode_label_width_mm", 30.0))
+            height_mm = float(settings.get("barcode_label_height_mm", 20.0))
+            page_w = width_mm * mm
+            page_h = height_mm * mm
+
+            # Save PIL image into an in-memory PNG with correct DPI so
+            # reportlab knows the exact physical size.
+            buf = io.BytesIO()
+            if isinstance(barcode_image, PILImage.Image):
+                barcode_image.save(buf, format="PNG", dpi=(203, 203))
+            else:
+                barcode_image.save(buf, format="PNG")
+            buf.seek(0)
+            img_reader = ImageReader(buf)
+
+            c = canvas.Canvas(path, pagesize=(page_w, page_h))
             for _ in range(copies):
-                c.drawImage(img_reader, 0, 0, width=width_mm * mm, 
-                           height=height_mm * mm, preserveAspectRatio=True, anchor='c')
+                c.drawImage(img_reader, 0, 0, width=page_w,
+                           height=page_h, preserveAspectRatio=False)
                 c.showPage()
                 
             c.save()

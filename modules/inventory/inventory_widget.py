@@ -999,8 +999,8 @@ class BarcodePreviewDialog(QDialog):
         # .copy() makes QImage own the data so it survives after 'data' is GC'd
         pix = QPixmap.fromImage(qimg.copy())
         
-        width_mm = float(self.settings.get("barcode_label_width_mm", 50.0))
-        height_mm = float(self.settings.get("barcode_label_height_mm", 25.0))
+        width_mm = float(self.settings.get("barcode_label_width_mm", 30.0))
+        height_mm = float(self.settings.get("barcode_label_height_mm", 20.0))
         aspect = width_mm / height_mm if height_mm > 0 else 2.0
         
         preview_width = 380

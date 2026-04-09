@@ -56,91 +56,90 @@ def decode_barcode(barcode_str: str):
 
 def generate_barcode_image(data_str: str, product_name: str, settings: dict = None, price_str: str = "") -> Image.Image:
     """
-    Generates a Code 128 barcode image matching physical dimensions specified in settings.
+    Generates a Code 128 barcode image sized to fit entirely within
+    a single sticker label (default 30 mm × 20 mm at 300 DPI).
     """
     settings = settings or {}
-    store_name = settings.get("barcode_store_name", "CanadaMart")
-    width_mm = float(settings.get("barcode_label_width_mm", 50.0))
-    height_mm = float(settings.get("barcode_label_height_mm", 25.0))
+    width_mm = float(settings.get("barcode_label_width_mm", 30.0))
+    height_mm = float(settings.get("barcode_label_height_mm", 20.0))
     show_price = str(settings.get("barcode_show_price", "1")) == "1"
-    
-    # Calculate target pixels assuming 300 DPI
-    dpi = 300
-    target_w = int(width_mm / 25.4 * dpi)
-    target_h = int(height_mm / 25.4 * dpi)
 
+    # Target pixel dimensions at 203 DPI (standard thermal label printer)
+    dpi = 203
+    target_w = int(width_mm / 25.4 * dpi)   # 30 mm → 240 px
+    target_h = int(height_mm / 25.4 * dpi)   # 20 mm → 160 px
+
+    # ── Generate compact Code 128 barcode ────────────────────────────
+    # No text below the barcode bars — we only want the barcode image + price
     code128 = barcode.get_barcode_class('code128')
     writer = ImageWriter()
     writer_options = {
-        'module_width': 0.3,
-        'module_height': max(10.0, height_mm - 15.0),
-        'quiet_zone': 6.5,
-        'font_size': 10,
-        'text_distance': 5.0,
+        'module_width': 0.2,
+        'module_height': max(5.0, height_mm * 0.30),
+        'quiet_zone': 1.0,
+        'font_size': 0,
+        'text_distance': 0,
+        'write_text': False,
         'background': 'white',
         'foreground': 'black',
-        'center_text': True
     }
-    
+
     bc = code128(data_str, writer=writer)
-    
     buffer = io.BytesIO()
     bc.write(buffer, options=writer_options)
     buffer.seek(0)
-    
     bc_img = Image.open(buffer).convert("RGB")
-    
+
+    # ── Create label canvas ──────────────────────────────────────────
     final_img = Image.new("RGB", (target_w, target_h), "white")
     draw = ImageDraw.Draw(final_img)
-    
+
+    # Font for price only
+    price_px = max(14, int(target_h * 0.10))
     try:
-        font_large = ImageFont.truetype("arial.ttf", max(16, int(target_h * 0.12)))
-        font_small = ImageFont.truetype("arial.ttf", max(12, int(target_h * 0.08)))
+        font_price = ImageFont.truetype("arialbd.ttf", price_px)
     except (IOError, OSError):
-        # Fallback: try Windows system fonts directory (needed in PyInstaller exe)
         try:
-            win_font = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", "arial.ttf")
-            font_large = ImageFont.truetype(win_font, max(16, int(target_h * 0.12)))
-            font_small = ImageFont.truetype(win_font, max(12, int(target_h * 0.08)))
+            wf = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+            font_price = ImageFont.truetype(os.path.join(wf, "arialbd.ttf"), price_px)
         except (IOError, OSError):
-            font_large = ImageFont.load_default()
-            font_small = ImageFont.load_default()
-        
-    y_cursor = int(target_h * 0.05)
-    
-    # Store Name - Disabled
-    # if store_name:
-    #     bbox = draw.textbbox((0, 0), store_name, font=font_large)
-    #     x = (target_w - (bbox[2] - bbox[0])) / 2
-    #     draw.text((x, y_cursor), store_name, font=font_large, fill="black")
-    #     y_cursor += (bbox[3] - bbox[1]) + int(target_h * 0.02)
-        
-    # Product Name
-    if product_name:
-        bbox = draw.textbbox((0, 0), product_name, font=font_small)
-        x = (target_w - (bbox[2] - bbox[0])) / 2
-        draw.text((x, y_cursor), product_name, font=font_small, fill="black")
-        y_cursor += (bbox[3] - bbox[1]) + int(target_h * 0.02)
-        
-    # Price
+            font_price = ImageFont.load_default()
+
+    pad = max(2, int(target_h * 0.015))
+
+    # ── Layout: barcode on top, price at bottom ──────────────────────
+    # Measure price height first to reserve space at bottom
+    price_h = 0
     if show_price and price_str:
-        bbox = draw.textbbox((0, 0), price_str, font=font_large)
-        x = (target_w - (bbox[2] - bbox[0])) / 2
-        draw.text((x, y_cursor), price_str, font=font_large, fill="black")
-        y_cursor += (bbox[3] - bbox[1]) + int(target_h * 0.02)
-        
-    # Paste Barcode
-    avail_h = target_h - y_cursor - int(target_h * 0.02)
-    if avail_h > 0:
-        if bc_img.width > target_w * 0.95 or bc_img.height > avail_h:
-            scale = min((target_w * 0.95) / bc_img.width, avail_h / bc_img.height)
-            new_w = max(1, int(bc_img.width * scale))
-            new_h = max(1, int(bc_img.height * scale))
-            bc_img = bc_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            
-        bc_x = (target_w - bc_img.width) // 2
-        bc_y = y_cursor + max(0, (avail_h - bc_img.height) // 2)
+        bbox = draw.textbbox((0, 0), price_str, font=font_price)
+        price_h = bbox[3] - bbox[1]
+
+    # Barcode fills from top down, leaving room for price + tiny gap
+    y = pad
+    gap = 1  # minimal gap between barcode and price
+    barcode_avail_h = target_h - y - pad - (price_h + gap if price_h else 0)
+
+    bc_bottom = y  # track where barcode ends
+    if barcode_avail_h > 0 and bc_img.width > 0 and bc_img.height > 0:
+        max_w = int(target_w * 0.95)
+        scale = min(max_w / bc_img.width, barcode_avail_h / bc_img.height)
+        new_w = max(1, int(bc_img.width * scale))
+        new_h = max(1, int(bc_img.height * scale))
+        bc_img = bc_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+        bc_x = (target_w - new_w) // 2
+        bc_y = y
         final_img.paste(bc_img, (bc_x, bc_y))
-    
+        bc_bottom = bc_y + new_h
+
+    # ── Price centred directly below barcode ─────────────────────────
+    if show_price and price_str and price_h:
+        bbox = draw.textbbox((0, 0), price_str, font=font_price)
+        px = (target_w - (bbox[2] - bbox[0])) // 2
+        py = bc_bottom + gap
+        draw.text((px, py), price_str, font=font_price, fill="black")
+
+    # Stamp DPI so the image is physically 30×20 mm (or whatever the label is)
+    final_img.info['dpi'] = (dpi, dpi)
     return final_img
 

@@ -621,8 +621,8 @@ class SettingsWidget(QWidget):
 
         # Barcode Labels
         self._bc_store_name.setText(self.db.get_setting("barcode_store_name", c.get("business_name", "CanadaMart")))
-        self._bc_label_width.setValue(float(self.db.get_setting("barcode_label_width_mm", "50.0")))
-        self._bc_label_height.setValue(float(self.db.get_setting("barcode_label_height_mm", "25.0")))
+        self._bc_label_width.setValue(float(self.db.get_setting("barcode_label_width_mm", "30.0")))
+        self._bc_label_height.setValue(float(self.db.get_setting("barcode_label_height_mm", "20.0")))
         self._bc_cols.setValue(int(self.db.get_setting("barcode_columns_per_row", "1")))
         self._bc_gap_x.setValue(float(self.db.get_setting("barcode_gap_x_mm", "2.0")))
         self._bc_gap_y.setValue(float(self.db.get_setting("barcode_gap_y_mm", "2.0")))
